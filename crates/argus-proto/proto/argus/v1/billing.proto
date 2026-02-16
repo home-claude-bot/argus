@@ -1,0 +1,605 @@
+// Argus Billing Service
+// Subscription management, payments, and usage tracking gRPC service.
+
+syntax = "proto3";
+
+package argus.v1;
+
+import "google/protobuf/timestamp.proto";
+import "argus/v1/common.proto";
+
+// ============================================================================
+// Billing Service
+// ============================================================================
+
+// BillingService handles subscriptions, payments, and usage tracking.
+service BillingService {
+  // -------------------------------------------------------------------------
+  // Subscription Management
+  // -------------------------------------------------------------------------
+
+  // Get user's current subscription
+  rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse);
+
+  // List available subscription plans
+  rpc ListPlans(ListPlansRequest) returns (ListPlansResponse);
+
+  // Create a checkout session for subscription
+  rpc CreateCheckoutSession(CreateCheckoutSessionRequest) returns (CreateCheckoutSessionResponse);
+
+  // Create a customer portal session
+  rpc CreatePortalSession(CreatePortalSessionRequest) returns (CreatePortalSessionResponse);
+
+  // Cancel subscription
+  rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse);
+
+  // Resume canceled subscription
+  rpc ResumeSubscription(ResumeSubscriptionRequest) returns (ResumeSubscriptionResponse);
+
+  // Change subscription plan
+  rpc ChangePlan(ChangePlanRequest) returns (ChangePlanResponse);
+
+  // -------------------------------------------------------------------------
+  // Payment Methods
+  // -------------------------------------------------------------------------
+
+  // List payment methods for a user
+  rpc ListPaymentMethods(ListPaymentMethodsRequest) returns (ListPaymentMethodsResponse);
+
+  // Set default payment method
+  rpc SetDefaultPaymentMethod(SetDefaultPaymentMethodRequest) returns (SetDefaultPaymentMethodResponse);
+
+  // Delete a payment method
+  rpc DeletePaymentMethod(DeletePaymentMethodRequest) returns (DeletePaymentMethodResponse);
+
+  // -------------------------------------------------------------------------
+  // Invoices
+  // -------------------------------------------------------------------------
+
+  // List invoices for a user
+  rpc ListInvoices(ListInvoicesRequest) returns (ListInvoicesResponse);
+
+  // Get invoice details
+  rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse);
+
+  // Get upcoming invoice preview
+  rpc GetUpcomingInvoice(GetUpcomingInvoiceRequest) returns (GetUpcomingInvoiceResponse);
+
+  // -------------------------------------------------------------------------
+  // Usage Tracking
+  // -------------------------------------------------------------------------
+
+  // Record API usage
+  rpc RecordUsage(RecordUsageRequest) returns (RecordUsageResponse);
+
+  // Get usage summary for a period
+  rpc GetUsageSummary(GetUsageSummaryRequest) returns (GetUsageSummaryResponse);
+
+  // Stream real-time usage updates
+  rpc StreamUsage(StreamUsageRequest) returns (stream UsageEvent);
+
+  // -------------------------------------------------------------------------
+  // Webhooks (internal)
+  // -------------------------------------------------------------------------
+
+  // Handle Stripe webhook event
+  rpc HandleWebhook(HandleWebhookRequest) returns (HandleWebhookResponse);
+
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ============================================================================
+// Subscription Types
+// ============================================================================
+
+// Subscription status
+enum SubscriptionStatus {
+  SUBSCRIPTION_STATUS_UNSPECIFIED = 0;
+  SUBSCRIPTION_STATUS_ACTIVE = 1;
+  SUBSCRIPTION_STATUS_PAST_DUE = 2;
+  SUBSCRIPTION_STATUS_CANCELED = 3;
+  SUBSCRIPTION_STATUS_INCOMPLETE = 4;
+  SUBSCRIPTION_STATUS_TRIALING = 5;
+  SUBSCRIPTION_STATUS_PAUSED = 6;
+}
+
+// Subscription information
+message Subscription {
+  // Subscription ID
+  string id = 1;
+
+  // User ID
+  UserId user_id = 2;
+
+  // Current tier
+  Tier tier = 3;
+
+  // Subscription status
+  SubscriptionStatus status = 4;
+
+  // Current period start
+  google.protobuf.Timestamp current_period_start = 5;
+
+  // Current period end
+  google.protobuf.Timestamp current_period_end = 6;
+
+  // Whether subscription will cancel at period end
+  bool cancel_at_period_end = 7;
+
+  // When the subscription was created
+  google.protobuf.Timestamp created_at = 8;
+
+  // Trial end date (if applicable)
+  google.protobuf.Timestamp trial_end = 9;
+
+  // Stripe subscription ID
+  string stripe_subscription_id = 10;
+}
+
+// Subscription plan
+message Plan {
+  // Plan ID (Stripe price ID)
+  string id = 1;
+
+  // Plan name
+  string name = 2;
+
+  // Plan description
+  string description = 3;
+
+  // Tier this plan represents
+  Tier tier = 4;
+
+  // Price in cents
+  int64 price_cents = 5;
+
+  // Currency (e.g., "usd")
+  string currency = 6;
+
+  // Billing interval
+  BillingInterval interval = 7;
+
+  // Features included
+  repeated string features = 8;
+
+  // Rate limit
+  RateLimit rate_limit = 9;
+
+  // Whether this plan is active
+  bool active = 10;
+
+  // Display order (for UI)
+  int32 display_order = 11;
+}
+
+enum BillingInterval {
+  BILLING_INTERVAL_UNSPECIFIED = 0;
+  BILLING_INTERVAL_MONTHLY = 1;
+  BILLING_INTERVAL_YEARLY = 2;
+}
+
+// ============================================================================
+// Subscription Requests/Responses
+// ============================================================================
+
+message GetSubscriptionRequest {
+  UserId user_id = 1;
+}
+
+message GetSubscriptionResponse {
+  Subscription subscription = 1;
+}
+
+message ListPlansRequest {
+  // Filter by tier (optional)
+  Tier tier = 1;
+
+  // Include inactive plans
+  bool include_inactive = 2;
+}
+
+message ListPlansResponse {
+  repeated Plan plans = 1;
+}
+
+message CreateCheckoutSessionRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Price ID to subscribe to
+  string price_id = 2;
+
+  // Success redirect URL
+  string success_url = 3;
+
+  // Cancel redirect URL
+  string cancel_url = 4;
+
+  // Trial days (optional, 0 for no trial)
+  int32 trial_days = 5;
+
+  // Promotion code (optional)
+  string promotion_code = 6;
+}
+
+message CreateCheckoutSessionResponse {
+  // Checkout session ID
+  string session_id = 1;
+
+  // Checkout URL
+  string url = 2;
+}
+
+message CreatePortalSessionRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Return URL after portal
+  string return_url = 2;
+}
+
+message CreatePortalSessionResponse {
+  // Portal session URL
+  string url = 1;
+}
+
+message CancelSubscriptionRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Cancel immediately or at period end
+  bool immediate = 2;
+
+  // Cancellation reason (optional)
+  string reason = 3;
+}
+
+message CancelSubscriptionResponse {
+  // Updated subscription
+  Subscription subscription = 1;
+}
+
+message ResumeSubscriptionRequest {
+  // User ID
+  UserId user_id = 1;
+}
+
+message ResumeSubscriptionResponse {
+  // Updated subscription
+  Subscription subscription = 1;
+}
+
+message ChangePlanRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // New price ID
+  string new_price_id = 2;
+
+  // Prorate changes
+  bool prorate = 3;
+}
+
+message ChangePlanResponse {
+  // Updated subscription
+  Subscription subscription = 1;
+
+  // Prorated amount (positive = charge, negative = credit)
+  int64 prorated_amount_cents = 2;
+}
+
+// ============================================================================
+// Payment Method Types
+// ============================================================================
+
+enum PaymentMethodType {
+  PAYMENT_METHOD_TYPE_UNSPECIFIED = 0;
+  PAYMENT_METHOD_TYPE_CARD = 1;
+  PAYMENT_METHOD_TYPE_BANK_ACCOUNT = 2;
+  PAYMENT_METHOD_TYPE_PAYPAL = 3;
+}
+
+message PaymentMethod {
+  // Payment method ID
+  string id = 1;
+
+  // Payment method type
+  PaymentMethodType type = 2;
+
+  // Whether this is the default
+  bool is_default = 3;
+
+  // Card details (if card)
+  CardDetails card = 4;
+
+  // Bank account details (if bank)
+  BankAccountDetails bank_account = 5;
+
+  // Created at
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message CardDetails {
+  // Card brand (visa, mastercard, etc.)
+  string brand = 1;
+
+  // Last 4 digits
+  string last4 = 2;
+
+  // Expiration month
+  uint32 exp_month = 3;
+
+  // Expiration year
+  uint32 exp_year = 4;
+
+  // Funding type (credit, debit, prepaid)
+  string funding = 5;
+}
+
+message BankAccountDetails {
+  // Bank name
+  string bank_name = 1;
+
+  // Last 4 digits of account
+  string last4 = 2;
+
+  // Account type (checking, savings)
+  string account_type = 3;
+}
+
+// ============================================================================
+// Payment Method Requests/Responses
+// ============================================================================
+
+message ListPaymentMethodsRequest {
+  UserId user_id = 1;
+}
+
+message ListPaymentMethodsResponse {
+  repeated PaymentMethod payment_methods = 1;
+}
+
+message SetDefaultPaymentMethodRequest {
+  UserId user_id = 1;
+  string payment_method_id = 2;
+}
+
+message SetDefaultPaymentMethodResponse {
+  bool success = 1;
+}
+
+message DeletePaymentMethodRequest {
+  UserId user_id = 1;
+  string payment_method_id = 2;
+}
+
+message DeletePaymentMethodResponse {
+  bool success = 1;
+}
+
+// ============================================================================
+// Invoice Types
+// ============================================================================
+
+enum InvoiceStatus {
+  INVOICE_STATUS_UNSPECIFIED = 0;
+  INVOICE_STATUS_DRAFT = 1;
+  INVOICE_STATUS_OPEN = 2;
+  INVOICE_STATUS_PAID = 3;
+  INVOICE_STATUS_VOID = 4;
+  INVOICE_STATUS_UNCOLLECTIBLE = 5;
+}
+
+message Invoice {
+  // Invoice ID
+  string id = 1;
+
+  // User ID
+  UserId user_id = 2;
+
+  // Invoice status
+  InvoiceStatus status = 3;
+
+  // Amount in cents
+  int64 amount_cents = 4;
+
+  // Amount paid in cents
+  int64 amount_paid_cents = 5;
+
+  // Currency
+  string currency = 6;
+
+  // Description
+  string description = 7;
+
+  // Period start
+  google.protobuf.Timestamp period_start = 8;
+
+  // Period end
+  google.protobuf.Timestamp period_end = 9;
+
+  // Created at
+  google.protobuf.Timestamp created_at = 10;
+
+  // Paid at
+  google.protobuf.Timestamp paid_at = 11;
+
+  // Hosted invoice URL
+  string hosted_invoice_url = 12;
+
+  // PDF download URL
+  string invoice_pdf_url = 13;
+
+  // Line items
+  repeated InvoiceLineItem line_items = 14;
+
+  // Stripe invoice ID
+  string stripe_invoice_id = 15;
+}
+
+message InvoiceLineItem {
+  // Description
+  string description = 1;
+
+  // Amount in cents
+  int64 amount_cents = 2;
+
+  // Quantity
+  uint32 quantity = 3;
+}
+
+// ============================================================================
+// Invoice Requests/Responses
+// ============================================================================
+
+message ListInvoicesRequest {
+  UserId user_id = 1;
+  PageRequest pagination = 2;
+  InvoiceStatus status = 3;
+}
+
+message ListInvoicesResponse {
+  repeated Invoice invoices = 1;
+  PageResponse pagination = 2;
+}
+
+message GetInvoiceRequest {
+  string invoice_id = 1;
+}
+
+message GetInvoiceResponse {
+  Invoice invoice = 1;
+}
+
+message GetUpcomingInvoiceRequest {
+  UserId user_id = 1;
+}
+
+message GetUpcomingInvoiceResponse {
+  Invoice invoice = 1;
+}
+
+// ============================================================================
+// Usage Tracking
+// ============================================================================
+
+message RecordUsageRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Metric name (e.g., "api_requests", "predictions")
+  string metric = 2;
+
+  // Usage count
+  uint64 count = 3;
+
+  // Timestamp (defaults to now if not specified)
+  google.protobuf.Timestamp timestamp = 4;
+
+  // Additional metadata
+  map<string, string> metadata = 5;
+}
+
+message RecordUsageResponse {
+  // Whether usage was recorded
+  bool success = 1;
+
+  // Updated usage for current period
+  uint64 current_period_usage = 2;
+
+  // Period limit (if applicable)
+  uint64 period_limit = 3;
+}
+
+message GetUsageSummaryRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Billing period (YYYY-MM format, defaults to current)
+  string period = 2;
+
+  // Metrics to include (empty for all)
+  repeated string metrics = 3;
+}
+
+message GetUsageSummaryResponse {
+  // Billing period
+  string period = 1;
+
+  // Usage by metric
+  repeated MetricUsage metrics = 2;
+
+  // Total API requests
+  uint64 total_requests = 3;
+
+  // Period limit
+  uint64 limit = 4;
+
+  // Usage percentage (0-100)
+  double usage_percentage = 5;
+}
+
+message MetricUsage {
+  // Metric name
+  string metric = 1;
+
+  // Total count
+  uint64 count = 2;
+
+  // Daily breakdown
+  repeated DailyUsage daily = 3;
+}
+
+message DailyUsage {
+  // Date (YYYY-MM-DD)
+  string date = 1;
+
+  // Count for that day
+  uint64 count = 2;
+}
+
+message StreamUsageRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Metrics to stream (empty for all)
+  repeated string metrics = 2;
+}
+
+message UsageEvent {
+  // Event timestamp
+  google.protobuf.Timestamp timestamp = 1;
+
+  // User ID
+  UserId user_id = 2;
+
+  // Metric name
+  string metric = 3;
+
+  // Count
+  uint64 count = 4;
+
+  // Current period total
+  uint64 period_total = 5;
+}
+
+// ============================================================================
+// Webhook Handling
+// ============================================================================
+
+message HandleWebhookRequest {
+  // Raw webhook payload
+  bytes payload = 1;
+
+  // Stripe signature header
+  string signature = 2;
+}
+
+message HandleWebhookResponse {
+  // Whether webhook was processed
+  bool success = 1;
+
+  // Event type that was handled
+  string event_type = 2;
+}

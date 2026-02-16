@@ -1,0 +1,618 @@
+// Argus Identity Service
+// User and organization management gRPC service.
+
+syntax = "proto3";
+
+package argus.v1;
+
+import "google/protobuf/timestamp.proto";
+import "argus/v1/common.proto";
+
+// ============================================================================
+// Identity Service
+// ============================================================================
+
+// IdentityService handles user profiles, organizations, and API keys.
+service IdentityService {
+  // -------------------------------------------------------------------------
+  // User Management
+  // -------------------------------------------------------------------------
+
+  // Get user profile
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+
+  // Update user profile
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+
+  // Delete user account
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+
+  // Search users (admin only)
+  rpc SearchUsers(SearchUsersRequest) returns (SearchUsersResponse);
+
+  // Get user by email
+  rpc GetUserByEmail(GetUserByEmailRequest) returns (GetUserByEmailResponse);
+
+  // -------------------------------------------------------------------------
+  // Organization Management
+  // -------------------------------------------------------------------------
+
+  // Create organization
+  rpc CreateOrganization(CreateOrganizationRequest) returns (CreateOrganizationResponse);
+
+  // Get organization
+  rpc GetOrganization(GetOrganizationRequest) returns (GetOrganizationResponse);
+
+  // Update organization
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (UpdateOrganizationResponse);
+
+  // Delete organization
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns (DeleteOrganizationResponse);
+
+  // List user's organizations
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse);
+
+  // -------------------------------------------------------------------------
+  // Organization Members
+  // -------------------------------------------------------------------------
+
+  // Add member to organization
+  rpc AddOrganizationMember(AddOrganizationMemberRequest) returns (AddOrganizationMemberResponse);
+
+  // Remove member from organization
+  rpc RemoveOrganizationMember(RemoveOrganizationMemberRequest) returns (RemoveOrganizationMemberResponse);
+
+  // Update member role
+  rpc UpdateOrganizationMember(UpdateOrganizationMemberRequest) returns (UpdateOrganizationMemberResponse);
+
+  // List organization members
+  rpc ListOrganizationMembers(ListOrganizationMembersRequest) returns (ListOrganizationMembersResponse);
+
+  // -------------------------------------------------------------------------
+  // API Key Management
+  // -------------------------------------------------------------------------
+
+  // Create API key
+  rpc CreateApiKey(CreateApiKeyRequest) returns (CreateApiKeyResponse);
+
+  // List API keys
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
+
+  // Revoke API key
+  rpc RevokeApiKey(RevokeApiKeyRequest) returns (RevokeApiKeyResponse);
+
+  // Validate API key
+  rpc ValidateApiKey(ValidateApiKeyRequest) returns (ValidateApiKeyResponse);
+
+  // -------------------------------------------------------------------------
+  // Invitations
+  // -------------------------------------------------------------------------
+
+  // Create invitation
+  rpc CreateInvitation(CreateInvitationRequest) returns (CreateInvitationResponse);
+
+  // Accept invitation
+  rpc AcceptInvitation(AcceptInvitationRequest) returns (AcceptInvitationResponse);
+
+  // List pending invitations
+  rpc ListInvitations(ListInvitationsRequest) returns (ListInvitationsResponse);
+
+  // Revoke invitation
+  rpc RevokeInvitation(RevokeInvitationRequest) returns (RevokeInvitationResponse);
+
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ============================================================================
+// User Types
+// ============================================================================
+
+message User {
+  // User ID
+  UserId id = 1;
+
+  // Email address
+  string email = 2;
+
+  // Display name
+  string display_name = 3;
+
+  // Avatar URL
+  string avatar_url = 4;
+
+  // User's tier
+  Tier tier = 5;
+
+  // User role
+  Role role = 6;
+
+  // Cognito subject
+  string cognito_sub = 7;
+
+  // Whether email is verified
+  bool email_verified = 8;
+
+  // When user was created
+  google.protobuf.Timestamp created_at = 9;
+
+  // When user was last updated
+  google.protobuf.Timestamp updated_at = 10;
+
+  // Last login time
+  google.protobuf.Timestamp last_login_at = 11;
+
+  // User metadata (JSON-encoded custom fields)
+  map<string, string> metadata = 12;
+
+  // Organizations the user belongs to
+  repeated OrganizationMembership organizations = 13;
+}
+
+// ============================================================================
+// User Requests/Responses
+// ============================================================================
+
+message GetUserRequest {
+  // User ID
+  UserId user_id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message UpdateUserRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Display name (optional)
+  optional string display_name = 2;
+
+  // Avatar URL (optional)
+  optional string avatar_url = 3;
+
+  // Metadata updates (merged with existing)
+  map<string, string> metadata = 4;
+}
+
+message UpdateUserResponse {
+  User user = 1;
+}
+
+message DeleteUserRequest {
+  // User ID
+  UserId user_id = 1;
+
+  // Confirmation (must be "DELETE")
+  string confirmation = 2;
+}
+
+message DeleteUserResponse {
+  bool success = 1;
+}
+
+message SearchUsersRequest {
+  // Search query (email, name)
+  string query = 1;
+
+  // Filter by tier
+  Tier tier = 2;
+
+  // Filter by role
+  Role role = 3;
+
+  // Pagination
+  PageRequest pagination = 4;
+}
+
+message SearchUsersResponse {
+  repeated User users = 1;
+  PageResponse pagination = 2;
+}
+
+message GetUserByEmailRequest {
+  string email = 1;
+}
+
+message GetUserByEmailResponse {
+  User user = 1;
+}
+
+// ============================================================================
+// Organization Types
+// ============================================================================
+
+message OrganizationId {
+  string value = 1;
+}
+
+message Organization {
+  // Organization ID
+  OrganizationId id = 1;
+
+  // Organization name
+  string name = 2;
+
+  // Organization slug (URL-friendly)
+  string slug = 3;
+
+  // Description
+  string description = 4;
+
+  // Logo URL
+  string logo_url = 5;
+
+  // Owner user ID
+  UserId owner_id = 6;
+
+  // Organization tier
+  Tier tier = 7;
+
+  // Member count
+  uint32 member_count = 8;
+
+  // When organization was created
+  google.protobuf.Timestamp created_at = 9;
+
+  // When organization was last updated
+  google.protobuf.Timestamp updated_at = 10;
+
+  // Organization settings
+  map<string, string> settings = 11;
+}
+
+// Organization membership role
+enum OrganizationRole {
+  ORGANIZATION_ROLE_UNSPECIFIED = 0;
+  ORGANIZATION_ROLE_MEMBER = 1;
+  ORGANIZATION_ROLE_ADMIN = 2;
+  ORGANIZATION_ROLE_OWNER = 3;
+}
+
+message OrganizationMembership {
+  // Organization ID
+  OrganizationId organization_id = 1;
+
+  // Organization name (for display)
+  string organization_name = 2;
+
+  // User's role in the organization
+  OrganizationRole role = 3;
+
+  // When user joined
+  google.protobuf.Timestamp joined_at = 4;
+}
+
+message OrganizationMember {
+  // User ID
+  UserId user_id = 1;
+
+  // User email
+  string email = 2;
+
+  // User display name
+  string display_name = 3;
+
+  // Avatar URL
+  string avatar_url = 4;
+
+  // Role in organization
+  OrganizationRole role = 5;
+
+  // When user joined
+  google.protobuf.Timestamp joined_at = 6;
+}
+
+// ============================================================================
+// Organization Requests/Responses
+// ============================================================================
+
+message CreateOrganizationRequest {
+  // Organization name
+  string name = 1;
+
+  // Organization slug (optional, auto-generated if empty)
+  string slug = 2;
+
+  // Description
+  string description = 3;
+
+  // Logo URL
+  string logo_url = 4;
+
+  // Creator user ID (becomes owner)
+  UserId owner_id = 5;
+}
+
+message CreateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message GetOrganizationRequest {
+  // Organization ID or slug
+  oneof identifier {
+    OrganizationId id = 1;
+    string slug = 2;
+  }
+}
+
+message GetOrganizationResponse {
+  Organization organization = 1;
+}
+
+message UpdateOrganizationRequest {
+  OrganizationId organization_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional string logo_url = 4;
+  map<string, string> settings = 5;
+}
+
+message UpdateOrganizationResponse {
+  Organization organization = 1;
+}
+
+message DeleteOrganizationRequest {
+  OrganizationId organization_id = 1;
+  string confirmation = 2;
+}
+
+message DeleteOrganizationResponse {
+  bool success = 1;
+}
+
+message ListOrganizationsRequest {
+  UserId user_id = 1;
+  PageRequest pagination = 2;
+}
+
+message ListOrganizationsResponse {
+  repeated Organization organizations = 1;
+  PageResponse pagination = 2;
+}
+
+// ============================================================================
+// Organization Member Requests/Responses
+// ============================================================================
+
+message AddOrganizationMemberRequest {
+  OrganizationId organization_id = 1;
+  string email = 2;
+  OrganizationRole role = 3;
+}
+
+message AddOrganizationMemberResponse {
+  OrganizationMember member = 1;
+}
+
+message RemoveOrganizationMemberRequest {
+  OrganizationId organization_id = 1;
+  UserId user_id = 2;
+}
+
+message RemoveOrganizationMemberResponse {
+  bool success = 1;
+}
+
+message UpdateOrganizationMemberRequest {
+  OrganizationId organization_id = 1;
+  UserId user_id = 2;
+  OrganizationRole role = 3;
+}
+
+message UpdateOrganizationMemberResponse {
+  OrganizationMember member = 1;
+}
+
+message ListOrganizationMembersRequest {
+  OrganizationId organization_id = 1;
+  PageRequest pagination = 2;
+}
+
+message ListOrganizationMembersResponse {
+  repeated OrganizationMember members = 1;
+  PageResponse pagination = 2;
+}
+
+// ============================================================================
+// API Key Types
+// ============================================================================
+
+message ApiKeyId {
+  string value = 1;
+}
+
+message ApiKey {
+  // API key ID
+  ApiKeyId id = 1;
+
+  // Key name/description
+  string name = 2;
+
+  // Key prefix (first 8 chars, for identification)
+  string prefix = 3;
+
+  // Owner (user or organization)
+  oneof owner {
+    UserId user_id = 4;
+    OrganizationId organization_id = 5;
+  }
+
+  // Scopes/permissions
+  repeated string scopes = 6;
+
+  // Rate limit override (optional)
+  RateLimit rate_limit = 7;
+
+  // When key was created
+  google.protobuf.Timestamp created_at = 8;
+
+  // When key expires (optional)
+  google.protobuf.Timestamp expires_at = 9;
+
+  // Last used time
+  google.protobuf.Timestamp last_used_at = 10;
+
+  // Whether key is active
+  bool active = 11;
+}
+
+// ============================================================================
+// API Key Requests/Responses
+// ============================================================================
+
+message CreateApiKeyRequest {
+  // Key name
+  string name = 1;
+
+  // Owner
+  oneof owner {
+    UserId user_id = 2;
+    OrganizationId organization_id = 3;
+  }
+
+  // Scopes
+  repeated string scopes = 4;
+
+  // Expiration (optional)
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message CreateApiKeyResponse {
+  // API key metadata
+  ApiKey api_key = 1;
+
+  // Full API key (only returned once!)
+  string key = 2;
+}
+
+message ListApiKeysRequest {
+  oneof owner {
+    UserId user_id = 1;
+    OrganizationId organization_id = 2;
+  }
+  PageRequest pagination = 3;
+}
+
+message ListApiKeysResponse {
+  repeated ApiKey api_keys = 1;
+  PageResponse pagination = 2;
+}
+
+message RevokeApiKeyRequest {
+  ApiKeyId api_key_id = 1;
+}
+
+message RevokeApiKeyResponse {
+  bool success = 1;
+}
+
+message ValidateApiKeyRequest {
+  // The full API key
+  string key = 1;
+
+  // Required scopes (optional)
+  repeated string required_scopes = 2;
+}
+
+message ValidateApiKeyResponse {
+  // Whether key is valid
+  bool valid = 1;
+
+  // API key metadata (if valid)
+  ApiKey api_key = 2;
+
+  // Error details (if invalid)
+  Error error = 3;
+}
+
+// ============================================================================
+// Invitation Types
+// ============================================================================
+
+message InvitationId {
+  string value = 1;
+}
+
+message Invitation {
+  // Invitation ID
+  InvitationId id = 1;
+
+  // Invited email
+  string email = 2;
+
+  // Organization being invited to
+  OrganizationId organization_id = 3;
+
+  // Organization name (for display)
+  string organization_name = 4;
+
+  // Role to assign
+  OrganizationRole role = 5;
+
+  // Who sent the invitation
+  UserId invited_by = 6;
+
+  // When invitation was created
+  google.protobuf.Timestamp created_at = 7;
+
+  // When invitation expires
+  google.protobuf.Timestamp expires_at = 8;
+
+  // Whether invitation was accepted
+  bool accepted = 9;
+
+  // When invitation was accepted
+  google.protobuf.Timestamp accepted_at = 10;
+}
+
+// ============================================================================
+// Invitation Requests/Responses
+// ============================================================================
+
+message CreateInvitationRequest {
+  string email = 1;
+  OrganizationId organization_id = 2;
+  OrganizationRole role = 3;
+  UserId invited_by = 4;
+}
+
+message CreateInvitationResponse {
+  Invitation invitation = 1;
+  string invitation_url = 2;
+}
+
+message AcceptInvitationRequest {
+  // Invitation token
+  string token = 1;
+
+  // User accepting (must match invited email)
+  UserId user_id = 2;
+}
+
+message AcceptInvitationResponse {
+  OrganizationMembership membership = 1;
+}
+
+message ListInvitationsRequest {
+  oneof scope {
+    string email = 1;
+    OrganizationId organization_id = 2;
+  }
+  bool include_expired = 3;
+  PageRequest pagination = 4;
+}
+
+message ListInvitationsResponse {
+  repeated Invitation invitations = 1;
+  PageResponse pagination = 2;
+}
+
+message RevokeInvitationRequest {
+  InvitationId invitation_id = 1;
+}
+
+message RevokeInvitationResponse {
+  bool success = 1;
+}
