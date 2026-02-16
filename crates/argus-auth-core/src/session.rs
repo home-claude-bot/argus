@@ -330,7 +330,7 @@ mod tests {
         fn new(secret: &str) -> Self {
             // Pad short secrets for testing (production requires 32+ bytes)
             let padded = if secret.len() < 32 {
-                format!("{:0<32}", secret)
+                format!("{secret:0<32}")
             } else {
                 secret.to_string()
             };
