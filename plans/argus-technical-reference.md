@@ -18,12 +18,14 @@ members = [
     "crates/argus-types",
     "crates/argus-db",
     "crates/argus-auth-core",
+    "crates/argus-identity-core",
     "crates/argus-billing-core",
     "crates/argus-proto",
     "crates/argus-mcp",
     "crates/argus-client",
     "crates/argus-utils",
     "services/auth-api",
+    "services/identity-api",
     "services/billing-api",
     "services/mcp-server",
 ]
@@ -91,23 +93,23 @@ config = "0.15"
 ### Dependency Graph
 
 ```
-                    argus-types
-                         │
-            ┌────────────┼────────────┐
-            ▼            ▼            ▼
-       argus-db     argus-utils   argus-proto
-            │            │            │
-    ┌───────┴───────┐    │            │
-    ▼               ▼    │            │
-argus-auth-core  argus-billing-core  │
-    │               │                 │
-    └───────┬───────┴─────────────────┘
-            ▼
-      argus-client
-            │
-    ┌───────┴───────┐
-    ▼               ▼
-auth-api      billing-api
+                        argus-types
+                             │
+            ┌────────────────┼────────────────┐
+            ▼                ▼                ▼
+       argus-db         argus-utils      argus-proto
+            │                │                │
+    ┌───────┼───────┐        │                │
+    ▼       ▼       ▼        │                │
+auth-core identity billing   │                │
+    │       │       │        │                │
+    └───────┴───────┴────────┴────────────────┘
+                    ▼
+              argus-client
+                    │
+    ┌───────────────┼───────────────┐
+    ▼               ▼               ▼
+auth-api      identity-api    billing-api
 ```
 
 ---
@@ -296,6 +298,175 @@ impl<U: UserRepository> AuthService<U> {
 }
 ```
 
+### argus-identity-core
+
+User lifecycle, profiles, organizations, preferences.
+
+```rust
+// crates/argus-identity-core/src/lib.rs
+
+pub mod user;
+pub mod profile;
+pub mod organization;
+pub mod preferences;
+pub mod service;
+pub mod error;
+
+pub use service::IdentityService;
+pub use error::IdentityError;
+
+// Identity service - manages user lifecycle
+pub struct IdentityService<U: UserRepository, O: OrgRepository> {
+    users: U,
+    orgs: O,
+    config: IdentityConfig,
+}
+
+impl<U: UserRepository, O: OrgRepository> IdentityService<U, O> {
+    /// Create a new user account
+    pub async fn create_user(&self, request: CreateUserRequest) -> Result<User, IdentityError> {
+        // Validate email uniqueness
+        if self.users.exists_by_email(&request.email).await? {
+            return Err(IdentityError::EmailAlreadyExists);
+        }
+
+        // Create user with default profile
+        let user = self.users.create(&NewUser {
+            email: request.email,
+            display_name: request.display_name,
+            cognito_sub: request.cognito_sub,
+        }).await?;
+
+        // Create default preferences
+        self.create_default_preferences(&user.id).await?;
+
+        Ok(user)
+    }
+
+    /// Get user profile with preferences
+    pub async fn get_profile(&self, user_id: &UserId) -> Result<UserProfile, IdentityError> {
+        let user = self.users.get_by_id(user_id).await?
+            .ok_or(IdentityError::UserNotFound)?;
+
+        let preferences = self.get_preferences(user_id).await?;
+        let org_memberships = self.get_user_orgs(user_id).await?;
+
+        Ok(UserProfile {
+            user,
+            preferences,
+            organizations: org_memberships,
+        })
+    }
+
+    /// Update user profile
+    pub async fn update_profile(
+        &self,
+        user_id: &UserId,
+        update: UpdateProfileRequest,
+    ) -> Result<UserProfile, IdentityError> {
+        self.users.update(user_id, &update).await?;
+        self.get_profile(user_id).await
+    }
+
+    /// Create organization with owner
+    pub async fn create_organization(
+        &self,
+        owner_id: &UserId,
+        request: CreateOrgRequest,
+    ) -> Result<Organization, IdentityError> {
+        // Validate org name uniqueness
+        if self.orgs.exists_by_slug(&request.slug).await? {
+            return Err(IdentityError::OrgSlugAlreadyExists);
+        }
+
+        let org = self.orgs.create(&NewOrg {
+            name: request.name,
+            slug: request.slug,
+            owner_id: owner_id.clone(),
+        }).await?;
+
+        // Add owner as admin member
+        self.add_org_member(&org.id, owner_id, OrgRole::Admin).await?;
+
+        Ok(org)
+    }
+
+    /// Get organization members
+    pub async fn get_org_members(
+        &self,
+        org_id: &OrgId,
+    ) -> Result<Vec<OrgMember>, IdentityError> {
+        self.orgs.get_members(org_id).await
+    }
+
+    /// Invite user to organization
+    pub async fn invite_to_org(
+        &self,
+        org_id: &OrgId,
+        email: &str,
+        role: OrgRole,
+    ) -> Result<OrgInvite, IdentityError> {
+        // Create invite with expiry
+        let invite = self.orgs.create_invite(&NewOrgInvite {
+            org_id: org_id.clone(),
+            email: email.to_string(),
+            role,
+            expires_at: Utc::now() + Duration::days(7),
+        }).await?;
+
+        // TODO: Send invite email via notification service
+
+        Ok(invite)
+    }
+
+    /// Delete user account (soft delete with grace period)
+    pub async fn delete_user(&self, user_id: &UserId) -> Result<(), IdentityError> {
+        // Mark for deletion in 30 days
+        self.users.mark_for_deletion(user_id, Utc::now() + Duration::days(30)).await?;
+
+        // Remove from all orgs
+        self.remove_from_all_orgs(user_id).await?;
+
+        Ok(())
+    }
+}
+
+// Domain types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserProfile {
+    pub user: User,
+    pub preferences: UserPreferences,
+    pub organizations: Vec<OrgMembership>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPreferences {
+    pub theme: Theme,
+    pub timezone: String,
+    pub locale: String,
+    pub notification_settings: NotificationSettings,
+    pub api_defaults: ApiDefaults,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Organization {
+    pub id: OrgId,
+    pub name: String,
+    pub slug: String,
+    pub owner_id: UserId,
+    pub tier: Tier,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrgRole {
+    Owner,
+    Admin,
+    Member,
+    Viewer,
+}
+```
+
 ### argus-billing-core
 
 Billing logic, payment provider abstraction.
@@ -473,6 +644,143 @@ message RecordUsageResponse {
 }
 ```
 
+```protobuf
+// crates/argus-proto/proto/identity.proto
+syntax = "proto3";
+package argus.identity.v1;
+
+service IdentityService {
+    // User lifecycle
+    rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+    rpc GetUser(GetUserRequest) returns (GetUserResponse);
+    rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+    rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+
+    // Profile management
+    rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
+    rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
+    rpc GetPreferences(GetPreferencesRequest) returns (GetPreferencesResponse);
+    rpc UpdatePreferences(UpdatePreferencesRequest) returns (UpdatePreferencesResponse);
+
+    // Organization management
+    rpc CreateOrganization(CreateOrganizationRequest) returns (CreateOrganizationResponse);
+    rpc GetOrganization(GetOrganizationRequest) returns (GetOrganizationResponse);
+    rpc GetOrgMembers(GetOrgMembersRequest) returns (GetOrgMembersResponse);
+    rpc InviteToOrg(InviteToOrgRequest) returns (InviteToOrgResponse);
+    rpc RemoveFromOrg(RemoveFromOrgRequest) returns (RemoveFromOrgResponse);
+}
+
+message CreateUserRequest {
+    string email = 1;
+    string display_name = 2;
+    string cognito_sub = 3;
+}
+
+message CreateUserResponse {
+    User user = 1;
+}
+
+message GetProfileRequest {
+    string user_id = 1;
+}
+
+message GetProfileResponse {
+    User user = 1;
+    UserPreferences preferences = 2;
+    repeated OrgMembership organizations = 3;
+}
+
+message UpdateProfileRequest {
+    string user_id = 1;
+    optional string display_name = 2;
+    optional string avatar_url = 3;
+    optional string bio = 4;
+}
+
+message User {
+    string id = 1;
+    string email = 2;
+    string display_name = 3;
+    string avatar_url = 4;
+    Tier tier = 5;
+    int64 created_at = 6;
+    int64 updated_at = 7;
+}
+
+message UserPreferences {
+    string theme = 1;        // "light", "dark", "system"
+    string timezone = 2;     // IANA timezone
+    string locale = 3;       // BCP 47 locale
+    NotificationSettings notifications = 4;
+}
+
+message NotificationSettings {
+    bool email_enabled = 1;
+    bool slack_enabled = 2;
+    bool webhook_enabled = 3;
+}
+
+message Organization {
+    string id = 1;
+    string name = 2;
+    string slug = 3;
+    string owner_id = 4;
+    Tier tier = 5;
+    int64 created_at = 6;
+}
+
+message OrgMembership {
+    string org_id = 1;
+    string org_name = 2;
+    OrgRole role = 3;
+    int64 joined_at = 4;
+}
+
+message OrgMember {
+    string user_id = 1;
+    string email = 2;
+    string display_name = 3;
+    OrgRole role = 4;
+    int64 joined_at = 5;
+}
+
+enum OrgRole {
+    ORG_ROLE_UNSPECIFIED = 0;
+    ORG_ROLE_OWNER = 1;
+    ORG_ROLE_ADMIN = 2;
+    ORG_ROLE_MEMBER = 3;
+    ORG_ROLE_VIEWER = 4;
+}
+
+message CreateOrganizationRequest {
+    string name = 1;
+    string slug = 2;
+}
+
+message CreateOrganizationResponse {
+    Organization organization = 1;
+}
+
+message GetOrgMembersRequest {
+    string org_id = 1;
+}
+
+message GetOrgMembersResponse {
+    repeated OrgMember members = 1;
+}
+
+message InviteToOrgRequest {
+    string org_id = 1;
+    string email = 2;
+    OrgRole role = 3;
+}
+
+message InviteToOrgResponse {
+    string invite_id = 1;
+    int64 expires_at = 2;
+}
+```
+
 ### argus-client
 
 SDK for service consumers.
@@ -481,11 +789,13 @@ SDK for service consumers.
 // crates/argus-client/src/lib.rs
 
 pub mod auth;
+pub mod identity;
 pub mod billing;
 pub mod config;
 pub mod error;
 
 pub use auth::AuthClient;
+pub use identity::IdentityClient;
 pub use billing::BillingClient;
 pub use config::ClientConfig;
 pub use error::ClientError;
@@ -537,6 +847,58 @@ impl AuthClient {
         Ok(response.into_inner().allowed)
     }
 }
+
+// Identity client
+pub struct IdentityClient {
+    grpc: IdentityServiceClient<Channel>,
+}
+
+impl IdentityClient {
+    pub async fn new(config: &ClientConfig) -> Result<Self, ClientError> {
+        let channel = Channel::from_shared(config.identity_url.clone())?
+            .connect()
+            .await?;
+        Ok(Self {
+            grpc: IdentityServiceClient::new(channel),
+        })
+    }
+
+    pub async fn create_user(&self, request: CreateUserRequest) -> Result<User, ClientError> {
+        let response = self.grpc.clone()
+            .create_user(request)
+            .await?;
+        Ok(response.into_inner().user.into())
+    }
+
+    pub async fn get_profile(&self, user_id: &UserId) -> Result<UserProfile, ClientError> {
+        let response = self.grpc.clone()
+            .get_profile(GetProfileRequest {
+                user_id: user_id.to_string(),
+            })
+            .await?;
+        Ok(response.into_inner().into())
+    }
+
+    pub async fn update_profile(
+        &self,
+        user_id: &UserId,
+        update: UpdateProfileRequest,
+    ) -> Result<UserProfile, ClientError> {
+        let response = self.grpc.clone()
+            .update_profile(update.with_user_id(user_id))
+            .await?;
+        Ok(response.into_inner().into())
+    }
+
+    pub async fn get_org_members(&self, org_id: &OrgId) -> Result<Vec<OrgMember>, ClientError> {
+        let response = self.grpc.clone()
+            .get_org_members(GetOrgMembersRequest {
+                org_id: org_id.to_string(),
+            })
+            .await?;
+        Ok(response.into_inner().members.into_iter().map(Into::into).collect())
+    }
+}
 ```
 
 ### argus-mcp
@@ -554,12 +916,13 @@ pub mod auth;
 
 pub use server::ArgusMcpServer;
 
-// MCP server combining auth and billing tools
+// MCP server combining auth, identity, and billing tools
 use rmcp::{ServerHandler, ServiceExt, model::*};
 use rmcp::handler::server::tool::ToolRouter;
 
 pub struct ArgusMcpServer {
     auth_service: Arc<AuthService>,
+    identity_service: Arc<IdentityService>,
     billing_service: Arc<BillingService>,
     tool_router: ToolRouter<Self>,
 }
@@ -607,6 +970,66 @@ impl ArgusMcpServer {
         let allowed = self.auth_service.check_entitlement(&user_id, &feature).await?;
         Ok(serde_json::to_string(&EntitlementResult { allowed, feature })?)
     }
+
+    // === Identity Tools ===
+
+    /// Get user profile with preferences and org memberships
+    #[tool(description = "Get full user profile including preferences and organization memberships")]
+    async fn get_user_profile(
+        &self,
+        #[arg(description = "The user ID")]
+        user_id: String,
+    ) -> Result<String, ToolError> {
+        let user_id = UserId::parse(&user_id)?;
+        let profile = self.identity_service.get_profile(&user_id).await?;
+        Ok(serde_json::to_string(&profile)?)
+    }
+
+    /// Create a new user account (for autonomous onboarding)
+    #[tool(description = "Create a new user account for autonomous onboarding workflows")]
+    async fn create_user(
+        &self,
+        #[arg(description = "User email address")]
+        email: String,
+        #[arg(description = "Display name for the user")]
+        display_name: Option<String>,
+    ) -> Result<String, ToolError> {
+        let user = self.identity_service.create_user(CreateUserRequest {
+            email,
+            display_name,
+            cognito_sub: None, // Will be set on first login
+        }).await?;
+        Ok(serde_json::to_string(&user)?)
+    }
+
+    /// Update user preferences
+    #[tool(description = "Update user preferences like theme, timezone, notifications")]
+    async fn update_preferences(
+        &self,
+        #[arg(description = "The user ID")]
+        user_id: String,
+        #[arg(description = "Preferences to update as JSON")]
+        preferences: String,
+    ) -> Result<String, ToolError> {
+        let user_id = UserId::parse(&user_id)?;
+        let prefs: UserPreferences = serde_json::from_str(&preferences)?;
+        let updated = self.identity_service.update_preferences(&user_id, prefs).await?;
+        Ok(serde_json::to_string(&updated)?)
+    }
+
+    /// Get organization members
+    #[tool(description = "List all members of an organization with their roles")]
+    async fn get_org_members(
+        &self,
+        #[arg(description = "The organization ID")]
+        org_id: String,
+    ) -> Result<String, ToolError> {
+        let org_id = OrgId::parse(&org_id)?;
+        let members = self.identity_service.get_org_members(&org_id).await?;
+        Ok(serde_json::to_string(&members)?)
+    }
+
+    // === Billing Tools ===
 
     /// Record API usage for billing
     #[tool(description = "Record API usage for a user (for metered billing)")]
@@ -750,10 +1173,11 @@ async fn main() -> anyhow::Result<()> {
     // Initialize services
     let db = DbPool::connect(&config.database_url).await?;
     let auth_service = Arc::new(AuthService::new(db.clone(), config.cognito.clone()));
+    let identity_service = Arc::new(IdentityService::new(db.clone()));
     let billing_service = Arc::new(BillingService::new(db.clone(), config.stripe.clone()));
 
     // Create MCP server
-    let server = ArgusMcpServer::new(auth_service, billing_service);
+    let server = ArgusMcpServer::new(auth_service, identity_service, billing_service);
 
     // Run with STDIO transport (for local use with Claude Code)
     let transport = (tokio::io::stdin(), tokio::io::stdout());
@@ -1040,6 +1464,306 @@ paths:
           description: Webhook processed
 ```
 
+### Identity API - REST Endpoints
+
+```yaml
+openapi: 3.1.0
+info:
+  title: Argus Identity API
+  version: 1.0.0
+  description: |
+    User lifecycle management, profiles, organizations, and preferences.
+    Supports autonomous operations for LLM agents.
+
+paths:
+  /api/v1/users:
+    post:
+      summary: Create a new user
+      description: Provision a new user account (for autonomous onboarding)
+      security:
+        - bearerAuth: []
+        - mcpAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /api/v1/users/{user_id}:
+    get:
+      summary: Get user by ID
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    delete:
+      summary: Delete user (soft delete with 30-day grace period)
+      security:
+        - bearerAuth: []
+      responses:
+        '202':
+          description: User marked for deletion
+
+  /api/v1/users/{user_id}/profile:
+    get:
+      summary: Get full user profile with preferences and orgs
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+    patch:
+      summary: Update user profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+
+  /api/v1/users/{user_id}/preferences:
+    get:
+      summary: Get user preferences
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferences'
+    put:
+      summary: Update user preferences
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPreferences'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferences'
+
+  /api/v1/organizations:
+    post:
+      summary: Create a new organization
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrgRequest'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+
+  /api/v1/organizations/{org_id}:
+    get:
+      summary: Get organization details
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+
+  /api/v1/organizations/{org_id}/members:
+    get:
+      summary: List organization members
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrgMember'
+    post:
+      summary: Invite user to organization
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteRequest'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgInvite'
+
+  /api/v1/organizations/{org_id}/members/{user_id}:
+    delete:
+      summary: Remove member from organization
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Member removed
+
+components:
+  schemas:
+    CreateUserRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        cognito_sub:
+          type: string
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        avatar_url:
+          type: string
+        tier:
+          $ref: '#/components/schemas/Tier'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    UserProfile:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        preferences:
+          $ref: '#/components/schemas/UserPreferences'
+        organizations:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrgMembership'
+
+    UserPreferences:
+      type: object
+      properties:
+        theme:
+          type: string
+          enum: [light, dark, system]
+        timezone:
+          type: string
+        locale:
+          type: string
+        notifications:
+          $ref: '#/components/schemas/NotificationSettings'
+
+    NotificationSettings:
+      type: object
+      properties:
+        email_enabled:
+          type: boolean
+        slack_enabled:
+          type: boolean
+        webhook_enabled:
+          type: boolean
+
+    Organization:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        owner_id:
+          type: string
+          format: uuid
+        tier:
+          $ref: '#/components/schemas/Tier'
+        member_count:
+          type: integer
+
+    OrgMember:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/OrgRole'
+        joined_at:
+          type: string
+          format: date-time
+
+    OrgRole:
+      type: string
+      enum: [owner, admin, member, viewer]
+
+    CreateOrgRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+
+    InviteRequest:
+      type: object
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/OrgRole'
+```
+
 ---
 
 ## Database Schema
@@ -1130,6 +1854,110 @@ CREATE TABLE billing.webhook_events (
 CREATE INDEX idx_webhook_stripe_id ON billing.webhook_events(stripe_event_id);
 ```
 
+### Identity Schema
+
+```sql
+-- migrations/identity/001_initial.sql
+CREATE SCHEMA IF NOT EXISTS identity;
+
+-- User profiles (extended user data beyond auth)
+CREATE TABLE identity.profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID UNIQUE NOT NULL,  -- References auth.users
+    display_name VARCHAR(255),
+    avatar_url TEXT,
+    bio TEXT,
+    company VARCHAR(255),
+    job_title VARCHAR(255),
+    location VARCHAR(255),
+    website_url TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_profiles_user_id ON identity.profiles(user_id);
+
+-- User preferences
+CREATE TABLE identity.preferences (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID UNIQUE NOT NULL,
+    theme VARCHAR(20) NOT NULL DEFAULT 'system',  -- light, dark, system
+    timezone VARCHAR(50) NOT NULL DEFAULT 'UTC',
+    locale VARCHAR(20) NOT NULL DEFAULT 'en-US',
+    date_format VARCHAR(20) DEFAULT 'YYYY-MM-DD',
+    time_format VARCHAR(10) DEFAULT '24h',
+    notification_email BOOLEAN NOT NULL DEFAULT TRUE,
+    notification_slack BOOLEAN NOT NULL DEFAULT FALSE,
+    notification_webhook BOOLEAN NOT NULL DEFAULT FALSE,
+    api_defaults JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_preferences_user_id ON identity.preferences(user_id);
+
+-- Organizations
+CREATE TABLE identity.organizations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    slug VARCHAR(100) UNIQUE NOT NULL,
+    owner_id UUID NOT NULL,  -- References auth.users
+    tier VARCHAR(50) NOT NULL DEFAULT 'explorer',
+    description TEXT,
+    logo_url TEXT,
+    website_url TEXT,
+    billing_email VARCHAR(255),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_organizations_slug ON identity.organizations(slug);
+CREATE INDEX idx_organizations_owner ON identity.organizations(owner_id);
+
+-- Organization members
+CREATE TABLE identity.org_members (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id UUID NOT NULL REFERENCES identity.organizations(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'member',  -- owner, admin, member, viewer
+    invited_by UUID,
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, user_id)
+);
+
+CREATE INDEX idx_org_members_org ON identity.org_members(org_id);
+CREATE INDEX idx_org_members_user ON identity.org_members(user_id);
+
+-- Organization invites
+CREATE TABLE identity.org_invites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id UUID NOT NULL REFERENCES identity.organizations(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'member',
+    token VARCHAR(64) UNIQUE NOT NULL,
+    invited_by UUID NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    accepted_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_org_invites_org ON identity.org_invites(org_id);
+CREATE INDEX idx_org_invites_email ON identity.org_invites(email);
+CREATE INDEX idx_org_invites_token ON identity.org_invites(token);
+
+-- User deletion queue (soft delete with grace period)
+CREATE TABLE identity.deletion_queue (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID UNIQUE NOT NULL,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    reason TEXT,
+    requested_by UUID,  -- NULL if self-requested
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_deletion_queue_scheduled ON identity.deletion_queue(scheduled_at);
+```
+
 ---
 
 ## Configuration
@@ -1145,13 +1973,22 @@ AUTH_JWT_SECRET=xxxxx
 AUTH_PORT=8080
 AUTH_GRPC_PORT=9090
 
+# Identity API
+IDENTITY_DATABASE_URL=postgres://user:pass@host/argus
+IDENTITY_AUTH_SERVICE_URL=http://auth-api:9090
+IDENTITY_PORT=8081
+IDENTITY_GRPC_PORT=9091
+IDENTITY_DEFAULT_TIMEZONE=UTC
+IDENTITY_DEFAULT_LOCALE=en-US
+
 # Billing API
 BILLING_DATABASE_URL=postgres://user:pass@host/argus
 BILLING_STRIPE_SECRET_KEY=sk_xxxxx
 BILLING_STRIPE_WEBHOOK_SECRET=whsec_xxxxx
 BILLING_AUTH_SERVICE_URL=http://auth-api:9090
-BILLING_PORT=8080
-BILLING_GRPC_PORT=9090
+BILLING_IDENTITY_SERVICE_URL=http://identity-api:9091
+BILLING_PORT=8082
+BILLING_GRPC_PORT=9092
 ```
 
 ### Feature Flags by Tier
