@@ -1,0 +1,38 @@
+[package]
+name = "argus-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MCP (Model Context Protocol) server implementation for Argus"
+
+[lints]
+workspace = true
+
+[dependencies]
+argus-types = { path = "../argus-types" }
+argus-auth-core = { path = "../argus-auth-core" }
+argus-billing-core = { path = "../argus-billing-core" }
+
+# MCP
+rmcp = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Observability
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }

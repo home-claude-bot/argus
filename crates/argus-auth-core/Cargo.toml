@@ -1,0 +1,29 @@
+[package]
+name = "argus-auth-core"
+description = "Authentication business logic for Argus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+argus-types = { path = "../argus-types" }
+argus-db = { path = "../argus-db" }
+argus-utils = { path = "../argus-utils" }
+async-trait = { workspace = true }
+jsonwebtoken = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+moka = { workspace = true }
+dashmap = { workspace = true }
+serde = { workspace = true }

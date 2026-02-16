@@ -1,0 +1,20 @@
+[package]
+name = "argus-client"
+description = "Client SDK for Argus auth and billing services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+argus-types = { path = "../argus-types" }
+argus-proto = { path = "../argus-proto" }
+tonic = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
