@@ -27,3 +27,14 @@ tracing = { workspace = true }
 moka = { workspace = true }
 dashmap = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+hex = { workspace = true }
+subtle = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+wiremock = { workspace = true }

@@ -76,6 +76,8 @@ jsonwebtoken = "9"
 sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
+subtle = "2.5"
+zeroize = { version = "1.7", features = ["derive"] }
 
 # Observability
 tracing = "0.1"
@@ -94,6 +96,7 @@ url = "2"
 reqwest = { version = "0.12", features = ["json"] }
 moka = { version = "0.12", features = ["future"] }
 dashmap = "5"
+hex = "0.4"
 
 # Testing
 tokio-test = "0.4"
