@@ -14,17 +14,23 @@ workspace = true
 [dependencies]
 argus-types = { path = "../argus-types" }
 argus-db = { path = "../argus-db" }
-argus-utils = { path = "../argus-utils" }
-async-trait = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-moka = { workspace = true }
+async-trait.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Crypto for webhook signature verification
+sha2.workspace = true
+hmac.workspace = true
+hex = "0.4"
+
+[dev-dependencies]
+tokio-test.workspace = true
+wiremock.workspace = true
 
 [features]
 default = []
-stripe = []
