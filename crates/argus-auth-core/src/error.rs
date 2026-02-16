@@ -3,7 +3,14 @@
 use thiserror::Error;
 
 /// Authentication errors
+///
+/// # Stability
+///
+/// This enum is marked `#[non_exhaustive]` to allow adding new variants
+/// without breaking semver compatibility. Use a wildcard match arm when
+/// matching on this type.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum AuthError {
     /// Invalid token (malformed, bad signature, etc.)
     #[error("invalid token")]

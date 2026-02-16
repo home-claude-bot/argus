@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::{
     config::AuthConfig,
     entitlement::EntitlementChecker,
-    session::{extract_tier_from_groups, SessionManager},
+    session::{extract_role_from_groups, extract_tier_from_groups, SessionManager},
     token::{CognitoClaims, TokenValidator},
     AuthError,
 };
@@ -58,7 +58,7 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
         Self {
             token_validator: TokenValidator::new(config.clone()),
             session_manager: SessionManager::new(
-                config.session_secret.clone(),
+                config.session_secret(),
                 session_duration_hours,
                 session_repo,
             ),
@@ -172,11 +172,7 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
         // Create new user
         let email = claims.email.clone().unwrap_or_else(|| format!("{}@cognito", claims.sub));
         let tier = extract_tier_from_groups(&claims.cognito_groups);
-        let role = if claims.cognito_groups.iter().any(|g| g.contains("admin")) {
-            "admin"
-        } else {
-            "user"
-        };
+        let role = extract_role_from_groups(&claims.cognito_groups);
 
         let new_user = argus_db::CreateUser {
             id: uuid::Uuid::new_v4(),

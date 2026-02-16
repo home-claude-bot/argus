@@ -6,15 +6,11 @@ use argus_db::{CreateSession, SessionRepository, SessionRow};
 use argus_types::{SessionId, Tier, UserId};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration as ChronoDuration, Utc};
-use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 
+use crate::crypto::{constant_time_eq, HmacKey};
 use crate::AuthError;
-
-type HmacSha256 = Hmac<Sha256>;
 
 /// Session cookie payload (matches CloudFront function format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,13 +42,9 @@ impl SessionPayload {
         let now = Utc::now().timestamp_millis();
         let expires = now + i64::from(duration_hours) * 60 * 60 * 1000;
 
-        // Extract tier from groups
+        // Extract tier and role from groups
         let tier = extract_tier_from_groups(&groups);
-        let role = if groups.iter().any(|g| g == "andrz_admin") {
-            "admin".to_string()
-        } else {
-            "user".to_string()
-        };
+        let role = extract_role_from_groups(&groups).to_string();
 
         Self {
             user_id: user_id.to_string(),
@@ -77,41 +69,61 @@ impl SessionPayload {
 }
 
 /// Extract tier from Cognito groups (returns Tier enum)
+///
+/// Uses exact suffix matching for security:
+/// - Groups must end with `_enterprise`, `_business`, `_professional`, or `_pro`
+/// - Prevents privilege escalation via crafted group names like "not_enterprise_user"
 pub fn extract_tier_from_groups(groups: &[String]) -> Tier {
     // Priority order: enterprise > business > professional > explorer
-    if groups.iter().any(|g| g.contains("enterprise")) {
+    // Use exact suffix matching to prevent privilege escalation attacks
+    if groups.iter().any(|g| g.ends_with("_enterprise")) {
         Tier::Enterprise
-    } else if groups.iter().any(|g| g.contains("business")) {
+    } else if groups.iter().any(|g| g.ends_with("_business")) {
         Tier::Business
-    } else if groups.iter().any(|g| g.contains("professional") || g.contains("pro")) {
+    } else if groups.iter().any(|g| g.ends_with("_professional") || g.ends_with("_pro")) {
         Tier::Professional
     } else {
         Tier::Explorer
     }
 }
 
-/// Constant-time byte comparison to prevent timing attacks
+/// Extract role from Cognito groups
+///
+/// Returns "admin" if any group ends with `_admin`, otherwise "user".
+/// Uses suffix matching consistent with tier extraction.
 #[inline]
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
+pub fn extract_role_from_groups(groups: &[String]) -> &'static str {
+    if groups.iter().any(|g| g.ends_with("_admin")) {
+        "admin"
+    } else {
+        "user"
     }
-    a.ct_eq(b).into()
 }
 
 /// Session manager handles session creation, signing, and validation
 #[derive(Clone)]
 pub struct SessionManager<R: SessionRepository> {
-    secret: String,
+    /// Pre-validated HMAC key for efficient signing
+    hmac_key: HmacKey,
     session_duration_hours: u32,
     repo: Arc<R>,
 }
 
 impl<R: SessionRepository> SessionManager<R> {
     /// Create a new session manager
-    pub fn new(secret: impl Into<String>, session_duration_hours: u32, repo: Arc<R>) -> Self {
+    ///
+    /// # Arguments
+    /// * `secret` - HMAC secret bytes (must be at least 32 bytes)
+    /// * `session_duration_hours` - How long sessions are valid
+    /// * `repo` - Session repository for persistence
+    ///
+    /// # Panics
+    /// Panics if secret is shorter than 32 bytes.
+    pub fn new(secret: impl AsRef<[u8]>, session_duration_hours: u32, repo: Arc<R>) -> Self {
+        let hmac_key = HmacKey::new(secret)
+            .expect("session secret must be at least 32 bytes");
         Self {
-            secret: secret.into(),
+            hmac_key,
             session_duration_hours,
             repo,
         }
@@ -172,7 +184,7 @@ impl<R: SessionRepository> SessionManager<R> {
         let (signature, payload_b64) = (parts[0], parts[1]);
 
         // Verify signature using constant-time comparison to prevent timing attacks
-        let expected_sig = self.compute_signature(payload_b64)?;
+        let expected_sig = self.compute_signature(payload_b64);
         if !constant_time_eq(signature.as_bytes(), expected_sig.as_bytes()) {
             tracing::debug!("Session signature mismatch");
             return Err(AuthError::InvalidToken);
@@ -273,21 +285,15 @@ impl<R: SessionRepository> SessionManager<R> {
         })?;
 
         let payload_b64 = URL_SAFE_NO_PAD.encode(&payload_json);
-        let signature = self.compute_signature(&payload_b64)?;
+        let signature = self.compute_signature(&payload_b64);
 
         Ok(format!("{payload_b64}.{signature}"))
     }
 
     /// Compute HMAC-SHA256 signature
-    fn compute_signature(&self, data: &str) -> Result<String, AuthError> {
-        let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes()).map_err(|e| {
-            tracing::error!("Failed to create HMAC: {}", e);
-            AuthError::Internal("Failed to sign session".to_string())
-        })?;
-
-        mac.update(data.as_bytes());
-        let result = mac.finalize();
-        Ok(URL_SAFE_NO_PAD.encode(result.into_bytes()))
+    fn compute_signature(&self, data: &str) -> String {
+        let signature = self.hmac_key.sign(data.as_bytes());
+        URL_SAFE_NO_PAD.encode(signature)
     }
 
     /// Hash a token for storage (not the signature, the full cookie value)
@@ -313,13 +319,19 @@ mod tests {
 
     // Test-only minimal session manager for HMAC testing (no DB)
     struct HmacTester {
-        secret: String,
+        hmac_key: HmacKey,
     }
 
     impl HmacTester {
         fn new(secret: &str) -> Self {
+            // Pad short secrets for testing (production requires 32+ bytes)
+            let padded = if secret.len() < 32 {
+                format!("{:0<32}", secret)
+            } else {
+                secret.to_string()
+            };
             Self {
-                secret: secret.to_string(),
+                hmac_key: HmacKey::new(padded).expect("padded key is >= 32 bytes"),
             }
         }
 
@@ -328,7 +340,7 @@ mod tests {
                 AuthError::Internal("Failed to serialize".to_string())
             })?;
             let payload_b64 = URL_SAFE_NO_PAD.encode(&payload_json);
-            let signature = self.compute_signature(&payload_b64)?;
+            let signature = self.compute_signature(&payload_b64);
             Ok(format!("{payload_b64}.{signature}"))
         }
 
@@ -338,7 +350,7 @@ mod tests {
                 return Err(AuthError::InvalidToken);
             }
             let (signature, payload_b64) = (parts[0], parts[1]);
-            let expected_sig = self.compute_signature(payload_b64)?;
+            let expected_sig = self.compute_signature(payload_b64);
             if !constant_time_eq(signature.as_bytes(), expected_sig.as_bytes()) {
                 return Err(AuthError::InvalidToken);
             }
@@ -353,11 +365,9 @@ mod tests {
             Ok(payload)
         }
 
-        fn compute_signature(&self, data: &str) -> Result<String, AuthError> {
-            let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes())
-                .map_err(|_| AuthError::Internal("HMAC error".to_string()))?;
-            mac.update(data.as_bytes());
-            Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+        fn compute_signature(&self, data: &str) -> String {
+            let signature = self.hmac_key.sign(data.as_bytes());
+            URL_SAFE_NO_PAD.encode(signature)
         }
     }
 
@@ -381,6 +391,36 @@ mod tests {
             extract_tier_from_groups(&["andrz_professional".to_string(), "andrz_enterprise".to_string()]),
             Tier::Enterprise
         );
+        // Pro shorthand
+        assert_eq!(
+            extract_tier_from_groups(&["andrz_pro".to_string()]),
+            Tier::Professional
+        );
+    }
+
+    #[test]
+    fn test_extract_tier_rejects_fuzzy_matches() {
+        // Security: ensure fuzzy matching doesn't allow privilege escalation
+        // "enterprise_disabled" should NOT grant enterprise tier
+        assert_eq!(
+            extract_tier_from_groups(&["enterprise_disabled".to_string()]),
+            Tier::Explorer
+        );
+        // "not_an_enterprise_user" should NOT grant enterprise tier
+        assert_eq!(
+            extract_tier_from_groups(&["not_an_enterprise_user".to_string()]),
+            Tier::Explorer
+        );
+        // "professional_revoked" should NOT grant professional tier
+        assert_eq!(
+            extract_tier_from_groups(&["professional_revoked".to_string()]),
+            Tier::Explorer
+        );
+        // Only exact suffix matches work
+        assert_eq!(
+            extract_tier_from_groups(&["tier_enterprise".to_string()]),
+            Tier::Enterprise
+        );
     }
 
     #[test]
@@ -393,6 +433,21 @@ mod tests {
         assert!(!constant_time_eq(b"abc123", b"xyz789"));
         // Empty strings
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_hmac_key_minimum_length() {
+        // Short secret should fail
+        let result = HmacKey::new("short");
+        assert!(result.is_err());
+
+        // 32-byte secret should succeed
+        let result = HmacKey::new("a".repeat(32));
+        assert!(result.is_ok());
+
+        // Longer secret should succeed
+        let result = HmacKey::new("a".repeat(64));
+        assert!(result.is_ok());
     }
 
     #[test]

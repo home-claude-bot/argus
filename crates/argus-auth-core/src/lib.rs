@@ -49,10 +49,10 @@ pub mod session;
 pub mod token;
 
 // Re-exports
-pub use config::AuthConfig;
+pub use config::{AuthConfig, ConfigError, SecretBytes, MIN_SECRET_LENGTH};
 pub use crypto::{constant_time_eq, hash_token, HmacKey};
 pub use entitlement::EntitlementChecker;
 pub use error::AuthError;
 pub use service::{AuthService, ClaimsSource, ValidatedClaims};
-pub use session::{extract_tier_from_groups, SessionManager, SessionPayload};
+pub use session::{extract_role_from_groups, extract_tier_from_groups, SessionManager, SessionPayload};
 pub use token::{CognitoClaims, Jwk, Jwks, TokenValidator};

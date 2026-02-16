@@ -211,7 +211,8 @@ impl TokenValidator {
         // Check if we have a cached list of known kids
         // If yes and kid isn't in it, reject immediately (no refetch)
         if let Some(known_kids) = self.jwks_kids_cache.get("jwks").await {
-            if !known_kids.contains(&kid.to_string()) {
+            // Use iter().any() with str comparison to avoid String allocation
+            if !known_kids.iter().any(|k| k == kid) {
                 tracing::debug!(
                     "Unknown key ID '{}' not in cached JWKS (known: {:?})",
                     kid,
@@ -330,11 +331,12 @@ mod tests {
 
     #[test]
     fn test_config_urls() {
+        // Use 32+ byte secret to satisfy minimum length requirement
         let config = AuthConfig::new(
             "us-east-1_TestPool",
             "us-east-1",
             "test-client-id",
-            "secret",
+            "test-secret-that-is-at-least-32-bytes-long",
         );
         assert_eq!(
             config.cognito_issuer(),
