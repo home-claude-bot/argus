@@ -28,9 +28,9 @@ During migration, both systems run:
                   │ gRPC
 ┌─────────────────▼───────────────────────────────────┐
 │                     Argus                           │
-│  ┌─────────────┐  ┌─────────────┐                  │
-│  │  Auth API   │  │ Billing API │                  │
-│  └─────────────┘  └─────────────┘                  │
+│  ┌─────────────┐ ┌──────────────┐ ┌─────────────┐  │
+│  │  Auth API   │ │ Identity API │ │ Billing API │  │
+│  └─────────────┘ └──────────────┘ └─────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -143,7 +143,22 @@ git rm -r src/billing/
 
 ---
 
-#### Story 5: argus-billing-core Crate
+#### Story 5: argus-identity-core Crate
+**Summary**: Implement identity/user lifecycle management
+**Points**: 8
+**Labels**: `agent-claude`, `area-identity`, `type-feature`
+
+**Acceptance Criteria:**
+- [ ] User lifecycle operations (create, update, delete)
+- [ ] Profile management
+- [ ] Organization support with roles
+- [ ] User preferences
+- [ ] Invite system for organizations
+- [ ] Unit and integration tests
+
+---
+
+#### Story 6: argus-billing-core Crate
 **Summary**: Implement billing business logic
 **Points**: 8
 **Labels**: `agent-claude`, `area-billing`, `type-feature`
@@ -157,7 +172,7 @@ git rm -r src/billing/
 
 ---
 
-#### Story 6: Auth API Service
+#### Story 7: Auth API Service
 **Summary**: Build auth microservice with REST/gRPC
 **Points**: 8
 **Labels**: `agent-claude`, `area-auth`, `type-feature`
@@ -171,7 +186,27 @@ git rm -r src/billing/
 
 ---
 
-#### Story 7: Billing API Service
+#### Story 8: Identity API Service
+**Summary**: Build identity microservice with REST/gRPC/GraphQL
+**Points**: 8
+**Labels**: `agent-claude`, `area-identity`, `type-feature`
+
+**Acceptance Criteria:**
+- [ ] REST endpoints for user/org management
+- [ ] gRPC service for internal calls
+- [ ] GraphQL for dashboard queries
+- [ ] Health/ready endpoints
+- [ ] Dockerfile and K8s manifests
+- [ ] API documentation
+
+**Supports Autonomous Org Vision:**
+- LLM agents can create/manage users via MCP
+- Self-service account management
+- Organization team provisioning
+
+---
+
+#### Story 9: Billing API Service
 **Summary**: Build billing microservice with REST/gRPC
 **Points**: 8
 **Labels**: `agent-claude`, `area-billing`, `type-feature`
@@ -185,20 +220,21 @@ git rm -r src/billing/
 
 ---
 
-#### Story 8: argus-client SDK
+#### Story 10: argus-client SDK
 **Summary**: Build client SDK for service consumers
 **Points**: 5
 **Labels**: `agent-claude`, `area-client`, `type-feature`
 
 **Acceptance Criteria:**
 - [ ] Auth client with all operations
+- [ ] Identity client with all operations
 - [ ] Billing client with all operations
 - [ ] Connection pooling/retry logic
 - [ ] Documentation and examples
 
 ---
 
-#### Story 9: Sibyl Integration
+#### Story 11: Sibyl Integration
 **Summary**: Integrate Sibyl with Argus services
 **Points**: 5
 **Labels**: `agent-claude`, `area-integration`, `type-feature`
@@ -207,12 +243,13 @@ git rm -r src/billing/
 - [ ] Sibyl depends on argus-client
 - [ ] Feature flags for migration
 - [ ] All auth calls routed to Argus
+- [ ] All identity calls routed to Argus
 - [ ] All billing calls routed to Argus
 - [ ] Tests passing
 
 ---
 
-#### Story 10: Nimbus Deployment
+#### Story 12: Nimbus Deployment
 **Summary**: Deploy Argus to AWS via Terraform
 **Points**: 5
 **Labels**: `agent-claude`, `area-infra`, `type-feature`
@@ -226,7 +263,7 @@ git rm -r src/billing/
 
 ---
 
-#### Story 11: Production Migration
+#### Story 13: Production Migration
 **Summary**: Complete production cutover and cleanup
 **Points**: 3
 **Labels**: `agent-claude`, `area-infra`, `type-feature`
@@ -240,7 +277,7 @@ git rm -r src/billing/
 
 ---
 
-#### Story 12: MCP Server Implementation
+#### Story 14: MCP Server Implementation
 **Summary**: Implement MCP (Model Context Protocol) server for LLM agent integration
 **Points**: 8
 **Labels**: `agent-claude`, `area-mcp`, `type-feature`
@@ -253,10 +290,19 @@ git rm -r src/billing/
 - [ ] Unit and integration tests
 - [ ] Documentation for MCP tools
 
-**Tools to Expose:**
+**Auth Tools to Expose:**
 - `validate_token` - Verify JWT/session tokens
-- `get_user_tier` - Get subscription tier
 - `check_entitlement` - Verify feature access
+- `create_session` - Issue new auth session
+
+**Identity Tools to Expose:**
+- `get_user_profile` - Fetch user profile data
+- `create_user` - Provision new user account
+- `update_preferences` - Modify user settings
+- `get_org_members` - List organization members
+
+**Billing Tools to Expose:**
+- `get_user_tier` - Get subscription tier
 - `record_usage` - Track API consumption
 - `create_checkout` - Generate payment session
 - `get_subscription` - Get subscription status
@@ -268,7 +314,7 @@ git rm -r src/billing/
 
 ---
 
-#### Story 13: Auth Performance Optimization
+#### Story 15: Auth Performance Optimization
 **Summary**: Optimize auth system for low latency and high throughput
 **Points**: 5
 **Labels**: `agent-claude`, `area-auth`, `type-performance`
@@ -283,7 +329,7 @@ git rm -r src/billing/
 
 ---
 
-#### Story 14: Auth Testing Maturity
+#### Story 16: Auth Testing Maturity
 **Summary**: Comprehensive testing for auth system
 **Points**: 5
 **Labels**: `agent-claude`, `area-auth`, `type-testing`
@@ -297,7 +343,7 @@ git rm -r src/billing/
 
 ---
 
-#### Story 15: OAuth Provider UI
+#### Story 17: OAuth Provider UI
 **Summary**: Add OAuth provider buttons to dashboard
 **Points**: 3
 **Labels**: `agent-claude`, `area-ui`, `type-feature`
@@ -391,6 +437,33 @@ The following Sibyl tickets are being migrated to Argus:
 - Sibyl becomes consumer of Argus via argus-client
 - Performance/testing work applies to centralized service
 
+### ADR-006: Separate Identity API from Auth API
+
+**Status**: Accepted
+**Context**: Need to model full user experience for autonomous org vision
+**Decision**: Split into Auth API (authentication) and Identity API (user lifecycle)
+**Rationale**:
+
+| Concern | Auth API | Identity API |
+|---------|----------|--------------|
+| Core Question | "Is this valid?" | "Who is this?" |
+| Path Temperature | Hot (every request) | Warm (account changes) |
+| Scale Pattern | Ultra-low latency | Moderate latency |
+| Change Frequency | Rare (security) | Often (features) |
+
+**Benefits:**
+- Independent scaling based on traffic patterns
+- Auth API can be hardened/audited separately
+- Identity API can evolve rapidly for new features
+- Enables autonomous user management by LLM agents
+- Clear security boundaries
+
+**Autonomous Org Enablement:**
+- LLM agents can create/manage users via Identity API
+- Full user lifecycle without human intervention
+- Self-service account management
+- Organization/team provisioning
+
 ---
 
 ## Appendix D: Resources
@@ -445,6 +518,8 @@ Add note in Architecture section:
 
 Sibyl depends on **Argus** for:
 - User authentication (via argus-client)
+- User profiles and preferences (via argus-client)
+- Organization management (via argus-client)
 - Billing and subscriptions (via argus-client)
 - Tier/entitlement checks (via argus-client)
 
@@ -459,8 +534,9 @@ Update Dependencies section:
 
 | Service | Purpose | Protocol |
 |---------|---------|----------|
-| Argus Auth API | Authentication, tiers | gRPC |
-| Argus Billing API | Subscriptions, usage | gRPC |
+| Argus Auth API | Authentication, tokens, sessions | gRPC |
+| Argus Identity API | User profiles, orgs, preferences | gRPC |
+| Argus Billing API | Subscriptions, usage, invoices | gRPC |
 ```
 
 Add to Cargo.toml dependencies:
