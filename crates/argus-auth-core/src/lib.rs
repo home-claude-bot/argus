@@ -55,6 +55,7 @@ pub use entitlement::EntitlementChecker;
 pub use error::AuthError;
 pub use service::{AuthService, ClaimsSource, ValidatedClaims};
 pub use session::{
-    extract_role_from_groups, extract_tier_from_groups, SessionManager, SessionPayload,
+    extract_role_from_groups, extract_tier_and_role, extract_tier_from_groups, SessionManager,
+    SessionPayload,
 };
 pub use token::{CognitoClaims, Jwk, Jwks, TokenValidator};

@@ -77,6 +77,7 @@ sha2 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
 subtle = "2.5"
+zeroize = { version = "1.7", features = ["derive"] }
 
 # Observability
 tracing = "0.1"

@@ -591,14 +591,7 @@ mod tests {
 
     #[test]
     fn test_token_hash_deterministic() {
-        // Direct hash computation (same logic as SessionManager::hash_token)
-        fn hash_token(token: &str) -> String {
-            use sha2::Digest;
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(token.as_bytes());
-            hex::encode(hasher.finalize())
-        }
-
+        // Uses hash_token from crypto module
         let token = "some-session-token-value";
         let hash1 = hash_token(token);
         let hash2 = hash_token(token);
@@ -610,5 +603,45 @@ mod tests {
 
         // Hash is 64 hex chars (256 bits)
         assert_eq!(hash1.len(), 64);
+    }
+
+    #[test]
+    fn test_extract_tier_and_role_single_pass() {
+        // Test combined extraction
+        let groups = vec!["andrz_enterprise".to_string(), "andrz_admin".to_string()];
+        let (tier, role) = extract_tier_and_role(&groups);
+        assert_eq!(tier, Tier::Enterprise);
+        assert_eq!(role, "admin");
+
+        // Test without admin
+        let groups = vec!["andrz_professional".to_string()];
+        let (tier, role) = extract_tier_and_role(&groups);
+        assert_eq!(tier, Tier::Professional);
+        assert_eq!(role, "user");
+
+        // Test empty groups
+        let (tier, role) = extract_tier_and_role(&[]);
+        assert_eq!(tier, Tier::Explorer);
+        assert_eq!(role, "user");
+    }
+
+    #[test]
+    fn test_extract_role_rejects_fuzzy_matches() {
+        // Security: ensure admin check uses suffix matching
+        // "admin_revoked" does NOT end with "_admin" so should be "user"
+        assert_eq!(
+            extract_role_from_groups(&["admin_revoked".to_string()]),
+            "user"
+        );
+        // "is_admin_disabled" does NOT end with "_admin" so should be "user"
+        assert_eq!(
+            extract_role_from_groups(&["is_admin_disabled".to_string()]),
+            "user"
+        );
+        // Valid admin group ending with "_admin"
+        assert_eq!(
+            extract_role_from_groups(&["andrz_admin".to_string()]),
+            "admin"
+        );
     }
 }

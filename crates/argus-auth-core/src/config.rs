@@ -1,6 +1,7 @@
 //! Configuration types for auth service
 
 use std::time::Duration;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Minimum secret length for HMAC-SHA256 (256 bits)
 pub const MIN_SECRET_LENGTH: usize = 32;
@@ -24,7 +25,13 @@ pub struct AuthConfig {
 }
 
 /// Secret bytes wrapper that never exposes content in Debug/Display
-#[derive(Clone)]
+///
+/// # Security
+///
+/// - Contents are zeroed on drop to prevent secrets lingering in memory
+/// - Debug impl shows only length, never content
+/// - Clone creates a new zeroed copy
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SecretBytes(Vec<u8>);
 
 impl SecretBytes {
