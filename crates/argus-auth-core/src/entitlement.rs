@@ -69,7 +69,7 @@ impl<R: UserRepository> EntitlementChecker<R> {
 
         // Check if the feature is available for this tier
         let tier_features = tier.features();
-        let allowed = tier_features.iter().any(|f| *f == feature);
+        let allowed = tier_features.contains(&feature);
 
         if allowed {
             Ok(EntitlementCheck {
@@ -110,8 +110,7 @@ impl<R: UserRepository> EntitlementChecker<R> {
             Ok(EntitlementCheck {
                 allowed: false,
                 reason: Some(format!(
-                    "Feature '{}' requires {} tier or higher",
-                    feature, min_tier
+                    "Feature '{feature}' requires {min_tier} tier or higher"
                 )),
                 remaining: None,
             })
@@ -132,12 +131,9 @@ impl<R: UserRepository> EntitlementChecker<R> {
 
 /// Find the minimum tier that has access to a feature
 fn find_min_tier_for_feature(feature: &str) -> Option<Tier> {
-    for tier in [Tier::Explorer, Tier::Professional, Tier::Business, Tier::Enterprise] {
-        if tier.features().iter().any(|f| *f == feature) {
-            return Some(tier);
-        }
-    }
-    None
+    [Tier::Explorer, Tier::Professional, Tier::Business, Tier::Enterprise]
+        .into_iter()
+        .find(|tier| tier.features().contains(&feature))
 }
 
 /// Get numeric tier level for comparison

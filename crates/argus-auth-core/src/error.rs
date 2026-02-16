@@ -62,12 +62,14 @@ impl AuthError {
     /// Get HTTP status code for this error
     pub fn status_code(&self) -> u16 {
         match self {
-            Self::InvalidToken | Self::InvalidCredentials | Self::InvalidMfaCode => 401,
-            Self::TokenExpired | Self::SessionRevoked => 401,
+            Self::InvalidToken
+            | Self::InvalidCredentials
+            | Self::InvalidMfaCode
+            | Self::TokenExpired
+            | Self::SessionRevoked => 401,
             Self::UserNotFound => 404,
-            Self::InsufficientScope | Self::FeatureNotAvailable(_) => 403,
+            Self::InsufficientScope | Self::FeatureNotAvailable(_) | Self::MfaRequired => 403,
             Self::RateLimitExceeded => 429,
-            Self::MfaRequired => 403,
             Self::Database(_) | Self::Configuration(_) | Self::Internal(_) => 500,
         }
     }

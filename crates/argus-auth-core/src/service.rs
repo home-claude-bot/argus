@@ -258,7 +258,7 @@ impl<U: UserRepository, S: SessionRepository> std::fmt::Debug for AuthService<U,
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthService")
             .field("config", &self.config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

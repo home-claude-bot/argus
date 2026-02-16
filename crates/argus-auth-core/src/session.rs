@@ -131,7 +131,7 @@ impl<R: SessionRepository> SessionManager<R> {
 
         // Create session in database
         let session_id = SessionId::new();
-        let token_hash = self.hash_token(&signed_cookie);
+        let token_hash = Self::hash_token(&signed_cookie);
         let expires_at = Utc::now() + ChronoDuration::hours(i64::from(self.session_duration_hours));
 
         let create = CreateSession {
@@ -190,7 +190,7 @@ impl<R: SessionRepository> SessionManager<R> {
         let payload = self.validate_cookie(cookie)?;
 
         // Check database for revocation
-        let token_hash = self.hash_token(cookie);
+        let token_hash = Self::hash_token(cookie);
         let session = self
             .repo
             .find_by_token_hash(&token_hash)
@@ -261,7 +261,7 @@ impl<R: SessionRepository> SessionManager<R> {
         let payload_b64 = URL_SAFE_NO_PAD.encode(&payload_json);
         let signature = self.compute_signature(&payload_b64)?;
 
-        Ok(format!("{}.{}", payload_b64, signature))
+        Ok(format!("{payload_b64}.{signature}"))
     }
 
     /// Compute HMAC-SHA256 signature
@@ -277,7 +277,7 @@ impl<R: SessionRepository> SessionManager<R> {
     }
 
     /// Hash a token for storage (not the signature, the full cookie value)
-    fn hash_token(&self, token: &str) -> String {
+    fn hash_token(token: &str) -> String {
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
         hasher.update(token.as_bytes());
@@ -289,7 +289,7 @@ impl<R: SessionRepository> std::fmt::Debug for SessionManager<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionManager")
             .field("session_duration_hours", &self.session_duration_hours)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
