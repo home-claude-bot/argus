@@ -13,6 +13,12 @@ import "argus/v1/common.proto";
 // ============================================================================
 
 // BillingService handles subscriptions, payments, and usage tracking.
+//
+// Security notes:
+// - All RPCs require authentication except HandleWebhook
+// - HandleWebhook is INTERNAL ONLY, must verify Stripe signatures
+// - URLs in checkout/portal requests must be validated against allowlist
+// - Idempotency keys should be UUIDs, stored until operation completes
 service BillingService {
   // -------------------------------------------------------------------------
   // Subscription Management
@@ -83,6 +89,8 @@ service BillingService {
   // -------------------------------------------------------------------------
 
   // Handle Stripe webhook event
+  // INTERNAL ONLY: Only called by Stripe, validates signature server-side
+  // Must verify: signature, timestamp (replay attack), idempotency
   rpc HandleWebhook(HandleWebhookRequest) returns (HandleWebhookResponse);
 
   // Health check
@@ -133,8 +141,11 @@ message Subscription {
   // Trial end date (if applicable)
   google.protobuf.Timestamp trial_end = 9;
 
-  // Stripe subscription ID
+  // Stripe subscription ID (internal use only, do not expose to clients)
   string stripe_subscription_id = 10;
+
+  // Reserved for future fields
+  reserved 11 to 20;
 }
 
 // Subscription plan
@@ -211,9 +222,12 @@ message CreateCheckoutSessionRequest {
   string price_id = 2;
 
   // Success redirect URL
+  // SECURITY: Must be validated server-side against allowed domains
+  // to prevent open redirect attacks
   string success_url = 3;
 
   // Cancel redirect URL
+  // SECURITY: Must be validated server-side against allowed domains
   string cancel_url = 4;
 
   // Trial days (optional, 0 for no trial)
@@ -221,6 +235,10 @@ message CreateCheckoutSessionRequest {
 
   // Promotion code (optional)
   string promotion_code = 6;
+
+  // Idempotency key (UUID, prevents duplicate charges)
+  // Client should generate and store this until operation completes
+  string idempotency_key = 7;
 }
 
 message CreateCheckoutSessionResponse {
@@ -251,8 +269,14 @@ message CancelSubscriptionRequest {
   // Cancel immediately or at period end
   bool immediate = 2;
 
-  // Cancellation reason (optional)
+  // Cancellation reason (optional but encouraged for analytics)
   string reason = 3;
+
+  // Idempotency key (prevents duplicate cancellations)
+  string idempotency_key = 4;
+
+  // Who is cancelling (for audit, required for admin-initiated cancels)
+  UserId requester_id = 5;
 }
 
 message CancelSubscriptionResponse {
@@ -279,6 +303,12 @@ message ChangePlanRequest {
 
   // Prorate changes
   bool prorate = 3;
+
+  // Idempotency key (prevents duplicate plan changes)
+  string idempotency_key = 4;
+
+  // Who is making the change (for audit, required for admin actions)
+  UserId requester_id = 5;
 }
 
 message ChangePlanResponse {
@@ -589,11 +619,15 @@ message UsageEvent {
 // ============================================================================
 
 message HandleWebhookRequest {
-  // Raw webhook payload
+  // Raw webhook payload (do not parse until signature verified)
   bytes payload = 1;
 
-  // Stripe signature header
+  // Stripe signature header (contains timestamp + signature)
   string signature = 2;
+
+  // Webhook timestamp (extracted from signature for replay check)
+  // Reject if older than 5 minutes
+  google.protobuf.Timestamp timestamp = 3;
 }
 
 message HandleWebhookResponse {

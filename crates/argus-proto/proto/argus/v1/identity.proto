@@ -13,6 +13,12 @@ import "argus/v1/common.proto";
 // ============================================================================
 
 // IdentityService handles user profiles, organizations, and API keys.
+//
+// Security notes:
+// - GetUserByEmail and SearchUsers are admin-only operations
+// - Delete operations require confirmation strings to prevent accidents
+// - API keys are only shown in full once (on creation), then only prefix
+// - All mutations should include requester_id for audit trail
 service IdentityService {
   // -------------------------------------------------------------------------
   // User Management
@@ -181,11 +187,17 @@ message UpdateUserResponse {
 }
 
 message DeleteUserRequest {
-  // User ID
+  // User ID to delete
   UserId user_id = 1;
 
-  // Confirmation (must be "DELETE")
+  // Confirmation (must be "DELETE" to proceed)
   string confirmation = 2;
+
+  // Who is deleting (for audit, required for admin-initiated deletes)
+  UserId requester_id = 3;
+
+  // Reason for deletion (optional but encouraged)
+  string reason = 4;
 }
 
 message DeleteUserResponse {
@@ -355,7 +367,15 @@ message UpdateOrganizationResponse {
 
 message DeleteOrganizationRequest {
   OrganizationId organization_id = 1;
+
+  // Confirmation (must be "DELETE" to proceed)
   string confirmation = 2;
+
+  // Who is deleting (for audit)
+  UserId requester_id = 3;
+
+  // Reason for deletion (optional)
+  string reason = 4;
 }
 
 message DeleteOrganizationResponse {

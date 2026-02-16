@@ -13,9 +13,17 @@ import "argus/v1/common.proto";
 // ============================================================================
 
 // AuthService handles authentication and session management.
+//
+// Security notes:
+// - All RPCs require mTLS or internal network access
+// - IntrospectToken is internal-only, never expose to public clients
+// - IP addresses must be validated server-side, never trust client input
 service AuthService {
   // Validate a JWT or session token
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+
+  // Batch validate multiple tokens (for gateway/proxy use)
+  rpc BatchValidateTokens(BatchValidateTokensRequest) returns (BatchValidateTokensResponse);
 
   // Create a session from Cognito tokens
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
@@ -35,6 +43,9 @@ service AuthService {
   // Check if a user has access to a feature
   rpc CheckEntitlement(CheckEntitlementRequest) returns (CheckEntitlementResponse);
 
+  // Batch check multiple entitlements
+  rpc BatchCheckEntitlements(BatchCheckEntitlementsRequest) returns (BatchCheckEntitlementsResponse);
+
   // Get user's tier
   rpc GetUserTier(GetUserTierRequest) returns (GetUserTierResponse);
 
@@ -42,6 +53,7 @@ service AuthService {
   rpc GetRateLimit(GetRateLimitRequest) returns (GetRateLimitResponse);
 
   // Introspect a token (get claims without full validation)
+  // INTERNAL ONLY: Do not expose to public API gateways
   rpc IntrospectToken(IntrospectTokenRequest) returns (IntrospectTokenResponse);
 
   // Health check
@@ -72,6 +84,35 @@ message ValidateTokenResponse {
 
   // Error details (if invalid)
   Error error = 3;
+
+  // Reserved for future fields
+  reserved 4 to 10;
+}
+
+// ============================================================================
+// Batch Token Validation (for gateways/proxies)
+// ============================================================================
+
+message BatchValidateTokensRequest {
+  // Tokens to validate (max 100)
+  repeated string tokens = 1;
+
+  // Expected audience (optional, applied to all)
+  string audience = 2;
+
+  // Required scopes (optional, applied to all)
+  repeated string required_scopes = 3;
+}
+
+message BatchValidateTokensResponse {
+  // Results in same order as input tokens
+  repeated ValidateTokenResponse results = 1;
+
+  // Number of valid tokens
+  uint32 valid_count = 2;
+
+  // Number of invalid tokens
+  uint32 invalid_count = 3;
 }
 
 // Claims extracted from a validated token
@@ -164,6 +205,12 @@ message RefreshTokenResponse {
 message RevokeSessionRequest {
   // Session ID to revoke
   SessionId session_id = 1;
+
+  // Who is revoking (for audit trail)
+  UserId requester_id = 2;
+
+  // Reason for revocation (optional)
+  string reason = 3;
 }
 
 message RevokeSessionResponse {
@@ -177,6 +224,12 @@ message RevokeAllSessionsRequest {
 
   // Exclude current session (optional)
   SessionId exclude_session_id = 2;
+
+  // Who is revoking (for audit trail, required for admin actions)
+  UserId requester_id = 3;
+
+  // Reason for revocation (optional, e.g., "password_change", "security_incident")
+  string reason = 4;
 }
 
 message RevokeAllSessionsResponse {
@@ -257,6 +310,40 @@ message CheckEntitlementResponse {
 
   // Minimum tier required for this feature
   Tier required_tier = 5;
+
+  // Reserved for future fields
+  reserved 6 to 10;
+}
+
+// ============================================================================
+// Batch Entitlement Checks
+// ============================================================================
+
+message BatchCheckEntitlementsRequest {
+  // User ID to check
+  UserId user_id = 1;
+
+  // Features to check (max 50)
+  repeated string features = 2;
+}
+
+message BatchCheckEntitlementsResponse {
+  // Results keyed by feature name
+  map<string, EntitlementResult> results = 1;
+
+  // User's current tier
+  Tier tier = 2;
+}
+
+message EntitlementResult {
+  // Whether access is allowed
+  bool allowed = 1;
+
+  // Reason if denied
+  string reason = 2;
+
+  // Remaining usage (if limited)
+  optional uint64 remaining = 3;
 }
 
 message GetUserTierRequest {

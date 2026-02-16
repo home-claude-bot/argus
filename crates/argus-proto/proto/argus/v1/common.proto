@@ -24,10 +24,13 @@ message SessionId {
 // Subscription tier levels
 enum Tier {
   TIER_UNSPECIFIED = 0;
-  TIER_EXPLORER = 1;      // Free tier - $29/mo
-  TIER_PROFESSIONAL = 2;  // Pro tier - $199/mo
-  TIER_BUSINESS = 3;      // Business tier - $999/mo
-  TIER_ENTERPRISE = 4;    // Enterprise tier - $4999/mo
+  TIER_EXPLORER = 1;      // Free tier - $0/mo (limited)
+  TIER_PROFESSIONAL = 2;  // Pro tier - $29/mo
+  TIER_BUSINESS = 3;      // Business tier - $199/mo
+  TIER_ENTERPRISE = 4;    // Enterprise tier - custom pricing
+
+  // Reserved for future tiers
+  reserved 5 to 10;
 }
 
 // User role
