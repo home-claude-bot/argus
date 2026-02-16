@@ -25,7 +25,9 @@ This Executive Brief contains everything needed for:
 
 ## Executive Summary
 
-**Argus** is a centralized auth and billing microservices platform, providing identity management and payment processing as reusable services across the organization.
+**Argus** is a centralized auth, identity, and billing microservices platform, providing authentication, user lifecycle management, and payment processing as reusable services across the organization.
+
+> **"Autonomous Org" Vision**: Argus is designed to support fully autonomous operations - where LLM agents can authenticate users, manage subscriptions, and handle the complete user lifecycle without human intervention.
 
 ### The Name
 
@@ -52,11 +54,13 @@ Before:                          After:
 │  ├───────────┤  │                       │ gRPC
 │  │  Billing  │  │              ┌────────▼────────┐
 │  ├───────────┤  │              │      Argus      │
-│  │Predictions│  │              │  ┌──────────┐   │
-│  └───────────┘  │              │  │ Auth API │   │
-└─────────────────┘              │  ├──────────┤   │
+│  │Predictions│  │              │  ┌───────────┐  │
+│  └───────────┘  │              │  │ Auth API  │  │
+└─────────────────┘              │  ├───────────┤  │
+                                 │  │Identity API│ │
+                                 │  ├───────────┤  │
                                  │  │Billing API│  │
-                                 │  └──────────┘   │
+                                 │  └───────────┘  │
                                  └─────────────────┘
 ```
 
@@ -64,9 +68,37 @@ Before:                          After:
 
 | Service | Purpose | Protocols |
 |---------|---------|-----------|
-| **Auth API** | Identity, sessions, tiers, entitlements | REST, gRPC, GraphQL, MCP |
-| **Billing API** | Subscriptions, payments, usage tracking | REST, gRPC, Webhooks, MCP |
+| **Auth API** | Authentication, sessions, tokens, entitlements | REST, gRPC, MCP |
+| **Identity API** | User lifecycle, profiles, org management, preferences | REST, gRPC, GraphQL, MCP |
+| **Billing API** | Subscriptions, payments, usage tracking, invoices | REST, gRPC, Webhooks, MCP |
 | **MCP Gateway** | LLM agent authentication & authorization | MCP (JSON-RPC) |
+
+### Service Boundaries (Auth vs Identity)
+
+**Why separate Auth from Identity?**
+
+| Concern | Auth API | Identity API |
+|---------|----------|--------------|
+| **Core Question** | "Is this request valid?" | "Who is this user?" |
+| **Data Scope** | Credentials, tokens, sessions | Profiles, preferences, orgs |
+| **Request Pattern** | Every API call (hot path) | Account changes (warm path) |
+| **Scale Requirements** | Ultra-low latency, high cache | Moderate latency, lower QPS |
+| **Change Frequency** | Rarely (security-critical) | Often (feature additions) |
+
+```
+User Request Flow:
+
+  ┌──────────┐    "Validate"    ┌──────────┐
+  │ Request  │─────────────────▶│ Auth API │  ◀── Hot path (every request)
+  └──────────┘                  └────┬─────┘
+                                     │ Valid token
+                                     ▼
+                               ┌──────────────┐
+                               │ Identity API │  ◀── Warm path (enrich context)
+                               │  (profiles,  │
+                               │   org data)  │
+                               └──────────────┘
+```
 
 ### MCP (Model Context Protocol) Support
 
@@ -81,10 +113,17 @@ Argus implements MCP to enable LLM agents to interact with auth and billing:
 ┌─────────────────────▼───────────────────────────────────────┐
 │                   Argus MCP Server                          │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │ Tools:                                               │   │
+│  │ Auth Tools:                                          │   │
 │  │  • validate_token - Verify JWT/session tokens        │   │
-│  │  • get_user_tier - Check subscription tier           │   │
 │  │  • check_entitlement - Verify feature access         │   │
+│  │  • create_session - Issue new auth session           │   │
+│  │ Identity Tools:                                      │   │
+│  │  • get_user_profile - Fetch user profile data        │   │
+│  │  • update_preferences - Modify user settings         │   │
+│  │  • create_user - Provision new user account          │   │
+│  │  • get_org_members - List organization members       │   │
+│  │ Billing Tools:                                       │   │
+│  │  • get_user_tier - Check subscription tier           │   │
 │  │  • record_usage - Track API consumption              │   │
 │  │  • create_checkout - Generate payment session        │   │
 │  ├─────────────────────────────────────────────────────┤   │
@@ -105,6 +144,8 @@ Argus implements MCP to enable LLM agents to interact with auth and billing:
 2. **Tier-Aware Responses** - Agents adjust behavior based on user tier
 3. **Usage Tracking** - Automatic consumption recording for billing
 4. **MCP-to-MCP Auth** - Argus authenticates requests from other MCP servers
+5. **Autonomous User Management** - Agents can onboard users, manage profiles
+6. **Self-Service Support** - Agents answer billing/account questions using identity data
 
 ### Technology Stack
 
@@ -198,13 +239,20 @@ billing.record_usage(user_id, "api_call", 1).await?;
 - [ ] REST + gRPC endpoints functional
 - [ ] Deployed to staging
 
-### Phase 3: Billing Core
+### Phase 3: Identity Core
+- [ ] argus-identity-core implemented
+- [ ] User lifecycle management working
+- [ ] Organization/team support
+- [ ] Profile management functional
+- [ ] Deployed to staging
+
+### Phase 4: Billing Core
 - [ ] argus-billing-core implemented
 - [ ] Stripe integration tested
 - [ ] Webhook handling working
 - [ ] Deployed to staging
 
-### Phase 4: Integration
+### Phase 5: Integration
 - [ ] argus-client SDK published
 - [ ] Sibyl migrated to use Argus
 - [ ] Production deployment
@@ -263,6 +311,7 @@ These auth-related issues will be addressed by Argus:
 | 2026-02-16 | Nimbus deploy | Existing EKS infrastructure |
 | 2026-02-16 | MCP support | Enable LLM agents to authenticate/authorize |
 | 2026-02-16 | Absorb Sibyl auth work | Consolidate SYBIL-43,44,49,57,60 into Argus |
+| 2026-02-16 | Separate Identity API | Auth (hot path) vs Identity (user lifecycle) - enables autonomous org vision where agents manage full user experience |
 
 ---
 

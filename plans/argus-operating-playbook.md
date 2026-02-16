@@ -76,6 +76,7 @@ jobs:
           cargo install sqlx-cli --no-default-features --features postgres
           sqlx database create --database-url $DATABASE_URL
           sqlx migrate run --source migrations/auth --database-url $DATABASE_URL
+          sqlx migrate run --source migrations/identity --database-url $DATABASE_URL
           sqlx migrate run --source migrations/billing --database-url $DATABASE_URL
         env:
           DATABASE_URL: postgres://test:test@localhost:5432/argus_test
@@ -107,6 +108,7 @@ jobs:
           name: binaries
           path: |
             target/release/auth-api
+            target/release/identity-api
             target/release/billing-api
 
   security:
@@ -213,6 +215,14 @@ jobs:
           push: true
           tags: ${{ env.ECR_REGISTRY }}/argus-auth-api:${{ github.sha }}
 
+      - name: Build and push identity-api
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/identity-api/Dockerfile
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/argus-identity-api:${{ github.sha }}
+
       - name: Build and push billing-api
         uses: docker/build-push-action@v5
         with:
@@ -250,6 +260,12 @@ jobs:
         run: |
           kubectl set image deployment/argus-auth-api \
             auth-api=${{ env.ECR_REGISTRY }}/argus-auth-api:${{ github.sha }} \
+            -n argus
+
+      - name: Deploy identity-api
+        run: |
+          kubectl set image deployment/argus-identity-api \
+            identity-api=${{ env.ECR_REGISTRY }}/argus-identity-api:${{ github.sha }} \
             -n argus
 
       - name: Deploy billing-api
@@ -383,6 +399,38 @@ EXPOSE 8080 9090
 CMD ["auth-api"]
 ```
 
+### Identity API
+
+```dockerfile
+# services/identity-api/Dockerfile
+FROM rust:1.78-slim-bookworm AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+COPY services/ services/
+
+RUN cargo build --release --package identity-api
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/identity-api /usr/local/bin/
+
+EXPOSE 8081 9091
+
+CMD ["identity-api"]
+```
+
 ### Billing API
 
 ```dockerfile
@@ -410,7 +458,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /app/target/release/billing-api /usr/local/bin/
 
-EXPOSE 8080 9090
+EXPOSE 8082 9092
 
 CMD ["billing-api"]
 ```
@@ -494,6 +542,157 @@ spec:
       targetPort: 9090
 ```
 
+### Identity API Deployment
+
+```yaml
+# deploy/k8s/identity-api/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argus-identity-api
+  namespace: argus
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: argus-identity-api
+  template:
+    metadata:
+      labels:
+        app: argus-identity-api
+    spec:
+      containers:
+        - name: identity-api
+          image: ${ECR_REGISTRY}/argus-identity-api:latest
+          ports:
+            - containerPort: 8081
+              name: http
+            - containerPort: 9091
+              name: grpc
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: argus-secrets
+                  key: database-url
+            - name: AUTH_SERVICE_URL
+              value: "http://argus-auth-api:9090"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argus-identity-api
+  namespace: argus
+spec:
+  selector:
+    app: argus-identity-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8081
+    - name: grpc
+      port: 9091
+      targetPort: 9091
+```
+
+### Billing API Deployment
+
+```yaml
+# deploy/k8s/billing-api/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argus-billing-api
+  namespace: argus
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: argus-billing-api
+  template:
+    metadata:
+      labels:
+        app: argus-billing-api
+    spec:
+      containers:
+        - name: billing-api
+          image: ${ECR_REGISTRY}/argus-billing-api:latest
+          ports:
+            - containerPort: 8082
+              name: http
+            - containerPort: 9092
+              name: grpc
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: argus-secrets
+                  key: database-url
+            - name: AUTH_SERVICE_URL
+              value: "http://argus-auth-api:9090"
+            - name: IDENTITY_SERVICE_URL
+              value: "http://argus-identity-api:9091"
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: argus-secrets
+                  key: stripe-secret-key
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: argus-billing-api
+  namespace: argus
+spec:
+  selector:
+    app: argus-billing-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8082
+    - name: grpc
+      port: 9092
+      targetPort: 9092
+```
+
 ---
 
 ## Operational Runbooks
@@ -516,6 +715,11 @@ source "./deploy/env/${ENV}.env"
 if [[ "$SERVICE" == "auth" || "$SERVICE" == "all" ]]; then
     echo "Running auth migrations..."
     sqlx migrate run --source migrations/auth --database-url "$AUTH_DATABASE_URL"
+fi
+
+if [[ "$SERVICE" == "identity" || "$SERVICE" == "all" ]]; then
+    echo "Running identity migrations..."
+    sqlx migrate run --source migrations/identity --database-url "$IDENTITY_DATABASE_URL"
 fi
 
 if [[ "$SERVICE" == "billing" || "$SERVICE" == "all" ]]; then
