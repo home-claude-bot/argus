@@ -64,7 +64,11 @@ impl<R: UserRepository> EntitlementChecker<R> {
     }
 
     /// Check if user has access to a feature
-    pub async fn check_feature(&self, user_id: &UserId, feature: &str) -> Result<EntitlementCheck, AuthError> {
+    pub async fn check_feature(
+        &self,
+        user_id: &UserId,
+        feature: &str,
+    ) -> Result<EntitlementCheck, AuthError> {
         let tier = self.get_tier(user_id).await?;
 
         // Check if the feature is available for this tier
@@ -93,7 +97,11 @@ impl<R: UserRepository> EntitlementChecker<R> {
     }
 
     /// Check if user has access to a typed feature
-    pub async fn check_typed_feature(&self, user_id: &UserId, feature: Feature) -> Result<EntitlementCheck, AuthError> {
+    pub async fn check_typed_feature(
+        &self,
+        user_id: &UserId,
+        feature: Feature,
+    ) -> Result<EntitlementCheck, AuthError> {
         let tier = self.get_tier(user_id).await?;
         let min_tier = feature.min_tier();
 
@@ -131,9 +139,14 @@ impl<R: UserRepository> EntitlementChecker<R> {
 
 /// Find the minimum tier that has access to a feature
 fn find_min_tier_for_feature(feature: &str) -> Option<Tier> {
-    [Tier::Explorer, Tier::Professional, Tier::Business, Tier::Enterprise]
-        .into_iter()
-        .find(|tier| tier.features().contains(&feature))
+    [
+        Tier::Explorer,
+        Tier::Professional,
+        Tier::Business,
+        Tier::Enterprise,
+    ]
+    .into_iter()
+    .find(|tier| tier.features().contains(&feature))
 }
 
 /// Get numeric tier level for comparison
@@ -165,10 +178,22 @@ mod tests {
 
     #[test]
     fn test_find_min_tier_for_feature() {
-        assert_eq!(find_min_tier_for_feature("api_access"), Some(Tier::Explorer));
-        assert_eq!(find_min_tier_for_feature("webhooks"), Some(Tier::Professional));
-        assert_eq!(find_min_tier_for_feature("team_management"), Some(Tier::Business));
-        assert_eq!(find_min_tier_for_feature("custom_models"), Some(Tier::Enterprise));
+        assert_eq!(
+            find_min_tier_for_feature("api_access"),
+            Some(Tier::Explorer)
+        );
+        assert_eq!(
+            find_min_tier_for_feature("webhooks"),
+            Some(Tier::Professional)
+        );
+        assert_eq!(
+            find_min_tier_for_feature("team_management"),
+            Some(Tier::Business)
+        );
+        assert_eq!(
+            find_min_tier_for_feature("custom_models"),
+            Some(Tier::Enterprise)
+        );
         assert_eq!(find_min_tier_for_feature("nonexistent"), None);
     }
 }

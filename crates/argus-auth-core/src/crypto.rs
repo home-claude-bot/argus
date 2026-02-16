@@ -40,8 +40,7 @@ impl HmacKey {
     /// Create HMAC instance for signing
     pub fn create_hmac(&self) -> Hmac<Sha256> {
         // This cannot fail because we validated key length in new()
-        Hmac::<Sha256>::new_from_slice(&self.key_bytes)
-            .expect("HMAC key length already validated")
+        Hmac::<Sha256>::new_from_slice(&self.key_bytes).expect("HMAC key length already validated")
     }
 
     /// Sign data and return the MAC bytes

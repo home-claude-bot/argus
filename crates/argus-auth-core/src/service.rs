@@ -170,7 +170,10 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
         }
 
         // Create new user
-        let email = claims.email.clone().unwrap_or_else(|| format!("{}@cognito", claims.sub));
+        let email = claims
+            .email
+            .clone()
+            .unwrap_or_else(|| format!("{}@cognito", claims.sub));
         let tier = extract_tier_from_groups(&claims.cognito_groups);
         let role = extract_role_from_groups(&claims.cognito_groups);
 
@@ -201,7 +204,9 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
         user_id: &UserId,
         feature: &str,
     ) -> Result<EntitlementCheck, AuthError> {
-        self.entitlement_checker.check_feature(user_id, feature).await
+        self.entitlement_checker
+            .check_feature(user_id, feature)
+            .await
     }
 
     /// Check if user has access to a typed feature
@@ -210,7 +215,9 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
         user_id: &UserId,
         feature: Feature,
     ) -> Result<EntitlementCheck, AuthError> {
-        self.entitlement_checker.check_typed_feature(user_id, feature).await
+        self.entitlement_checker
+            .check_typed_feature(user_id, feature)
+            .await
     }
 
     /// Check if user has access to a feature (boolean result)
@@ -238,7 +245,6 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
         self.token_validator.invalidate_cache().await;
     }
 }
-
 
 impl<U: UserRepository, S: SessionRepository> std::fmt::Debug for AuthService<U, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

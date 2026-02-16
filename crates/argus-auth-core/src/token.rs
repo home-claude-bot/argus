@@ -163,13 +163,14 @@ impl TokenValidator {
         validation.validate_aud = false;
 
         // Decode and validate
-        let token_data = decode::<CognitoClaims>(token, &decoding_key, &validation).map_err(|e| {
-            tracing::debug!("Token validation failed: {}", e);
-            match e.kind() {
-                jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
-                _ => AuthError::InvalidToken,
-            }
-        })?;
+        let token_data =
+            decode::<CognitoClaims>(token, &decoding_key, &validation).map_err(|e| {
+                tracing::debug!("Token validation failed: {}", e);
+                match e.kind() {
+                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
+                    _ => AuthError::InvalidToken,
+                }
+            })?;
 
         let claims = token_data.claims;
 
@@ -181,11 +182,8 @@ impl TokenValidator {
         });
 
         if !valid_client_id {
-            tracing::debug!(
-                "Client ID mismatch: expected {}, got {:?}",
-                self.config.cognito_client_id,
-                claims.get_client_id()
-            );
+            // Don't log actual client IDs to prevent information leakage
+            tracing::debug!("Client ID mismatch");
             return Err(AuthError::InvalidToken);
         }
 

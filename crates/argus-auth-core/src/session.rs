@@ -9,7 +9,7 @@ use chrono::{Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::crypto::{constant_time_eq, HmacKey};
+use crate::crypto::{constant_time_eq, hash_token, HmacKey};
 use crate::AuthError;
 
 /// Session cookie payload (matches CloudFront function format)
@@ -42,16 +42,15 @@ impl SessionPayload {
         let now = Utc::now().timestamp_millis();
         let expires = now + i64::from(duration_hours) * 60 * 60 * 1000;
 
-        // Extract tier and role from groups
-        let tier = extract_tier_from_groups(&groups);
-        let role = extract_role_from_groups(&groups).to_string();
+        // Extract tier and role from groups in single pass
+        let (tier, role) = extract_tier_and_role(&groups);
 
         Self {
             user_id: user_id.to_string(),
             email: email.into(),
             groups,
             tier: tier.to_string(),
-            role,
+            role: role.to_string(),
             issued: now,
             expires,
         }
@@ -73,18 +72,9 @@ impl SessionPayload {
 /// Uses exact suffix matching for security:
 /// - Groups must end with `_enterprise`, `_business`, `_professional`, or `_pro`
 /// - Prevents privilege escalation via crafted group names like "not_enterprise_user"
+#[inline]
 pub fn extract_tier_from_groups(groups: &[String]) -> Tier {
-    // Priority order: enterprise > business > professional > explorer
-    // Use exact suffix matching to prevent privilege escalation attacks
-    if groups.iter().any(|g| g.ends_with("_enterprise")) {
-        Tier::Enterprise
-    } else if groups.iter().any(|g| g.ends_with("_business")) {
-        Tier::Business
-    } else if groups.iter().any(|g| g.ends_with("_professional") || g.ends_with("_pro")) {
-        Tier::Professional
-    } else {
-        Tier::Explorer
-    }
+    extract_tier_and_role(groups).0
 }
 
 /// Extract role from Cognito groups
@@ -93,11 +83,38 @@ pub fn extract_tier_from_groups(groups: &[String]) -> Tier {
 /// Uses suffix matching consistent with tier extraction.
 #[inline]
 pub fn extract_role_from_groups(groups: &[String]) -> &'static str {
-    if groups.iter().any(|g| g.ends_with("_admin")) {
-        "admin"
-    } else {
-        "user"
+    extract_tier_and_role(groups).1
+}
+
+/// Extract both tier and role in a single pass over groups
+///
+/// More efficient when both values are needed (e.g., session creation).
+/// Uses exact suffix matching for security.
+pub fn extract_tier_and_role(groups: &[String]) -> (Tier, &'static str) {
+    let mut tier = Tier::Explorer;
+    let mut is_admin = false;
+
+    for group in groups {
+        // Check tier suffixes (priority: enterprise > business > professional)
+        if group.ends_with("_enterprise") {
+            tier = Tier::Enterprise;
+        } else if group.ends_with("_business") && tier != Tier::Enterprise {
+            tier = Tier::Business;
+        } else if (group.ends_with("_professional") || group.ends_with("_pro"))
+            && tier != Tier::Enterprise
+            && tier != Tier::Business
+        {
+            tier = Tier::Professional;
+        }
+
+        // Check admin suffix
+        if group.ends_with("_admin") {
+            is_admin = true;
+        }
     }
+
+    let role = if is_admin { "admin" } else { "user" };
+    (tier, role)
 }
 
 /// Session manager handles session creation, signing, and validation
@@ -120,8 +137,7 @@ impl<R: SessionRepository> SessionManager<R> {
     /// # Panics
     /// Panics if secret is shorter than 32 bytes.
     pub fn new(secret: impl AsRef<[u8]>, session_duration_hours: u32, repo: Arc<R>) -> Self {
-        let hmac_key = HmacKey::new(secret)
-            .expect("session secret must be at least 32 bytes");
+        let hmac_key = HmacKey::new(secret).expect("session secret must be at least 32 bytes");
         Self {
             hmac_key,
             session_duration_hours,
@@ -138,22 +154,15 @@ impl<R: SessionRepository> SessionManager<R> {
         ip_address: Option<String>,
         user_agent: Option<String>,
     ) -> Result<(SessionId, String), AuthError> {
-        let email = email.into();
-
-        // Create payload
-        let payload = SessionPayload::new(
-            user_id,
-            email.clone(),
-            groups,
-            self.session_duration_hours,
-        );
+        // Create payload (consumes email)
+        let payload = SessionPayload::new(user_id, email, groups, self.session_duration_hours);
 
         // Sign the payload
         let signed_cookie = self.sign_payload(&payload)?;
 
         // Create session in database
         let session_id = SessionId::new();
-        let token_hash = Self::hash_token(&signed_cookie);
+        let token_hash = hash_token(&signed_cookie);
         let expires_at = Utc::now() + ChronoDuration::hours(i64::from(self.session_duration_hours));
 
         let create = CreateSession {
@@ -212,7 +221,7 @@ impl<R: SessionRepository> SessionManager<R> {
         let payload = self.validate_cookie(cookie)?;
 
         // Check database for revocation
-        let token_hash = Self::hash_token(cookie);
+        let token_hash = hash_token(cookie);
         let session = self
             .repo
             .find_by_token_hash(&token_hash)
@@ -271,10 +280,13 @@ impl<R: SessionRepository> SessionManager<R> {
 
     /// Update last active timestamp
     pub async fn touch_session(&self, session_id: SessionId) -> Result<(), AuthError> {
-        self.repo.update_last_active(session_id.0).await.map_err(|e| {
-            tracing::error!("Failed to update session: {}", e);
-            AuthError::Internal("Failed to update session".to_string())
-        })
+        self.repo
+            .update_last_active(session_id.0)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update session: {}", e);
+                AuthError::Internal("Failed to update session".to_string())
+            })
     }
 
     /// Sign a session payload and return the cookie value
@@ -294,14 +306,6 @@ impl<R: SessionRepository> SessionManager<R> {
     fn compute_signature(&self, data: &str) -> String {
         let signature = self.hmac_key.sign(data.as_bytes());
         URL_SAFE_NO_PAD.encode(signature)
-    }
-
-    /// Hash a token for storage (not the signature, the full cookie value)
-    fn hash_token(token: &str) -> String {
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(token.as_bytes());
-        hex::encode(hasher.finalize())
     }
 }
 
@@ -336,9 +340,8 @@ mod tests {
         }
 
         fn sign_payload(&self, payload: &SessionPayload) -> Result<String, AuthError> {
-            let payload_json = serde_json::to_vec(payload).map_err(|_| {
-                AuthError::Internal("Failed to serialize".to_string())
-            })?;
+            let payload_json = serde_json::to_vec(payload)
+                .map_err(|_| AuthError::Internal("Failed to serialize".to_string()))?;
             let payload_b64 = URL_SAFE_NO_PAD.encode(&payload_json);
             let signature = self.compute_signature(&payload_b64);
             Ok(format!("{payload_b64}.{signature}"))
@@ -388,7 +391,10 @@ mod tests {
         );
         // Enterprise takes priority
         assert_eq!(
-            extract_tier_from_groups(&["andrz_professional".to_string(), "andrz_enterprise".to_string()]),
+            extract_tier_from_groups(&[
+                "andrz_professional".to_string(),
+                "andrz_enterprise".to_string()
+            ]),
             Tier::Enterprise
         );
         // Pro shorthand

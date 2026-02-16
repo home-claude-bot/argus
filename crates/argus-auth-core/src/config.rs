@@ -70,8 +70,13 @@ impl AuthConfig {
         cognito_client_id: impl Into<String>,
         session_secret: impl AsRef<str>,
     ) -> Self {
-        Self::try_new(cognito_pool_id, aws_region, cognito_client_id, session_secret)
-            .expect("session_secret must be at least 32 bytes")
+        Self::try_new(
+            cognito_pool_id,
+            aws_region,
+            cognito_client_id,
+            session_secret,
+        )
+        .expect("session_secret must be at least 32 bytes")
     }
 
     /// Create a new auth config with validation
