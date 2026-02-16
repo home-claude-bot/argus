@@ -1,0 +1,399 @@
+// Argus Auth Service
+// Authentication and session management gRPC service.
+
+syntax = "proto3";
+
+package argus.v1;
+
+import "google/protobuf/timestamp.proto";
+import "argus/v1/common.proto";
+
+// ============================================================================
+// Auth Service
+// ============================================================================
+
+// AuthService handles authentication and session management.
+//
+// Security notes:
+// - All RPCs require mTLS or internal network access
+// - IntrospectToken is internal-only, never expose to public clients
+// - IP addresses must be validated server-side, never trust client input
+service AuthService {
+  // Validate a JWT or session token
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+
+  // Batch validate multiple tokens (for gateway/proxy use)
+  rpc BatchValidateTokens(BatchValidateTokensRequest) returns (BatchValidateTokensResponse);
+
+  // Create a session from Cognito tokens
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // Refresh an access token
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+
+  // Revoke a session
+  rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
+
+  // Revoke all sessions for a user
+  rpc RevokeAllSessions(RevokeAllSessionsRequest) returns (RevokeAllSessionsResponse);
+
+  // List active sessions for a user
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // Check if a user has access to a feature
+  rpc CheckEntitlement(CheckEntitlementRequest) returns (CheckEntitlementResponse);
+
+  // Batch check multiple entitlements
+  rpc BatchCheckEntitlements(BatchCheckEntitlementsRequest) returns (BatchCheckEntitlementsResponse);
+
+  // Get user's tier
+  rpc GetUserTier(GetUserTierRequest) returns (GetUserTierResponse);
+
+  // Get rate limit for a user
+  rpc GetRateLimit(GetRateLimitRequest) returns (GetRateLimitResponse);
+
+  // Introspect a token (get claims without full validation)
+  // INTERNAL ONLY: Do not expose to public API gateways
+  rpc IntrospectToken(IntrospectTokenRequest) returns (IntrospectTokenResponse);
+
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ============================================================================
+// Token Validation
+// ============================================================================
+
+message ValidateTokenRequest {
+  // The token to validate (JWT or session cookie)
+  string token = 1;
+
+  // Expected audience (optional, for stricter validation)
+  string audience = 2;
+
+  // Required scopes (optional)
+  repeated string required_scopes = 3;
+}
+
+message ValidateTokenResponse {
+  // Whether the token is valid
+  bool valid = 1;
+
+  // Validated claims (if valid)
+  TokenClaims claims = 2;
+
+  // Error details (if invalid)
+  Error error = 3;
+
+  // Reserved for future fields
+  reserved 4 to 10;
+}
+
+// ============================================================================
+// Batch Token Validation (for gateways/proxies)
+// ============================================================================
+
+message BatchValidateTokensRequest {
+  // Tokens to validate (max 100)
+  repeated string tokens = 1;
+
+  // Expected audience (optional, applied to all)
+  string audience = 2;
+
+  // Required scopes (optional, applied to all)
+  repeated string required_scopes = 3;
+}
+
+message BatchValidateTokensResponse {
+  // Results in same order as input tokens
+  repeated ValidateTokenResponse results = 1;
+
+  // Number of valid tokens
+  uint32 valid_count = 2;
+
+  // Number of invalid tokens
+  uint32 invalid_count = 3;
+}
+
+// Claims extracted from a validated token
+message TokenClaims {
+  // User ID
+  UserId user_id = 1;
+
+  // User email
+  string email = 2;
+
+  // Whether email is verified
+  bool email_verified = 3;
+
+  // User's subscription tier
+  Tier tier = 4;
+
+  // User role
+  Role role = 5;
+
+  // Cognito groups
+  repeated string groups = 6;
+
+  // Token scopes
+  repeated string scopes = 7;
+
+  // Token issued at
+  google.protobuf.Timestamp issued_at = 8;
+
+  // Token expiration
+  google.protobuf.Timestamp expires_at = 9;
+
+  // Token source (jwt or session)
+  TokenSource source = 10;
+}
+
+enum TokenSource {
+  TOKEN_SOURCE_UNSPECIFIED = 0;
+  TOKEN_SOURCE_JWT = 1;
+  TOKEN_SOURCE_SESSION = 2;
+}
+
+// ============================================================================
+// Session Management
+// ============================================================================
+
+message CreateSessionRequest {
+  // Cognito ID token
+  string id_token = 1;
+
+  // Cognito access token
+  string access_token = 2;
+
+  // Client IP address (for audit)
+  string ip_address = 3;
+
+  // Client user agent (for audit)
+  string user_agent = 4;
+}
+
+message CreateSessionResponse {
+  // Session ID
+  SessionId session_id = 1;
+
+  // Signed session cookie value
+  string session_cookie = 2;
+
+  // Session expiration
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message RefreshTokenRequest {
+  // Refresh token
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  // New access token
+  string access_token = 1;
+
+  // New ID token (if applicable)
+  string id_token = 2;
+
+  // Token expiration in seconds
+  uint64 expires_in = 3;
+
+  // Token type (Bearer)
+  string token_type = 4;
+}
+
+message RevokeSessionRequest {
+  // Session ID to revoke
+  SessionId session_id = 1;
+
+  // Who is revoking (for audit trail)
+  UserId requester_id = 2;
+
+  // Reason for revocation (optional)
+  string reason = 3;
+}
+
+message RevokeSessionResponse {
+  // Whether the session was successfully revoked
+  bool success = 1;
+}
+
+message RevokeAllSessionsRequest {
+  // User ID whose sessions to revoke
+  UserId user_id = 1;
+
+  // Exclude current session (optional)
+  SessionId exclude_session_id = 2;
+
+  // Who is revoking (for audit trail, required for admin actions)
+  UserId requester_id = 3;
+
+  // Reason for revocation (optional, e.g., "password_change", "security_incident")
+  string reason = 4;
+}
+
+message RevokeAllSessionsResponse {
+  // Number of sessions revoked
+  uint64 revoked_count = 1;
+}
+
+message ListSessionsRequest {
+  // User ID to list sessions for
+  UserId user_id = 1;
+
+  // Include revoked sessions
+  bool include_revoked = 2;
+
+  // Pagination
+  PageRequest pagination = 3;
+}
+
+message ListSessionsResponse {
+  // Active sessions
+  repeated SessionInfo sessions = 1;
+
+  // Pagination info
+  PageResponse pagination = 2;
+}
+
+// Session information
+message SessionInfo {
+  // Session ID
+  SessionId session_id = 1;
+
+  // When the session was created
+  google.protobuf.Timestamp created_at = 2;
+
+  // When the session expires
+  google.protobuf.Timestamp expires_at = 3;
+
+  // Last activity time
+  google.protobuf.Timestamp last_active_at = 4;
+
+  // IP address (may be masked for privacy)
+  string ip_address = 5;
+
+  // User agent
+  string user_agent = 6;
+
+  // Whether this is the current session
+  bool is_current = 7;
+
+  // Whether session is revoked
+  bool revoked = 8;
+}
+
+// ============================================================================
+// Entitlements
+// ============================================================================
+
+message CheckEntitlementRequest {
+  // User ID to check
+  UserId user_id = 1;
+
+  // Feature to check access for
+  string feature = 2;
+}
+
+message CheckEntitlementResponse {
+  // Whether access is allowed
+  bool allowed = 1;
+
+  // Reason if denied
+  string reason = 2;
+
+  // Remaining usage (if limited)
+  optional uint64 remaining = 3;
+
+  // User's current tier
+  Tier tier = 4;
+
+  // Minimum tier required for this feature
+  Tier required_tier = 5;
+
+  // Reserved for future fields
+  reserved 6 to 10;
+}
+
+// ============================================================================
+// Batch Entitlement Checks
+// ============================================================================
+
+message BatchCheckEntitlementsRequest {
+  // User ID to check
+  UserId user_id = 1;
+
+  // Features to check (max 50)
+  repeated string features = 2;
+}
+
+message BatchCheckEntitlementsResponse {
+  // Results keyed by feature name
+  map<string, EntitlementResult> results = 1;
+
+  // User's current tier
+  Tier tier = 2;
+}
+
+message EntitlementResult {
+  // Whether access is allowed
+  bool allowed = 1;
+
+  // Reason if denied
+  string reason = 2;
+
+  // Remaining usage (if limited)
+  optional uint64 remaining = 3;
+}
+
+message GetUserTierRequest {
+  // User ID
+  UserId user_id = 1;
+}
+
+message GetUserTierResponse {
+  // User's current tier
+  Tier tier = 1;
+
+  // Features available at this tier
+  repeated string features = 2;
+
+  // Rate limit for this tier
+  RateLimit rate_limit = 3;
+}
+
+message GetRateLimitRequest {
+  // User ID
+  UserId user_id = 1;
+}
+
+message GetRateLimitResponse {
+  // Rate limit configuration
+  RateLimit rate_limit = 1;
+
+  // Current rate limit status
+  RateLimitStatus status = 2;
+}
+
+// ============================================================================
+// Token Introspection
+// ============================================================================
+
+message IntrospectTokenRequest {
+  // Token to introspect
+  string token = 1;
+}
+
+message IntrospectTokenResponse {
+  // Whether token is active
+  bool active = 1;
+
+  // Token claims (if active)
+  TokenClaims claims = 2;
+
+  // Token type (access_token, id_token, session)
+  string token_type = 3;
+
+  // Client ID the token was issued to
+  string client_id = 4;
+}

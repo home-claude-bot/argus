@@ -1,0 +1,138 @@
+// Argus Common Types
+// Shared protobuf definitions used across all Argus services.
+
+syntax = "proto3";
+
+package argus.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// Core Types
+// ============================================================================
+
+// Unique user identifier (UUID format)
+message UserId {
+  string value = 1;
+}
+
+// Unique session identifier (UUID format)
+message SessionId {
+  string value = 1;
+}
+
+// Subscription tier levels
+enum Tier {
+  TIER_UNSPECIFIED = 0;
+  TIER_EXPLORER = 1;      // Free tier - $0/mo (limited)
+  TIER_PROFESSIONAL = 2;  // Pro tier - $29/mo
+  TIER_BUSINESS = 3;      // Business tier - $199/mo
+  TIER_ENTERPRISE = 4;    // Enterprise tier - custom pricing
+
+  // Reserved for future tiers
+  reserved 5 to 10;
+}
+
+// User role
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_USER = 1;
+  ROLE_ADMIN = 2;
+}
+
+// ============================================================================
+// Error Handling
+// ============================================================================
+
+// Standard error response
+message Error {
+  // Error code (e.g., "INVALID_TOKEN", "RATE_LIMIT_EXCEEDED")
+  string code = 1;
+
+  // Human-readable error message
+  string message = 2;
+
+  // Additional error details (JSON-encoded)
+  map<string, string> details = 3;
+}
+
+// ============================================================================
+// Rate Limiting
+// ============================================================================
+
+// Rate limit configuration
+message RateLimit {
+  // Maximum requests per window
+  uint32 requests = 1;
+
+  // Window duration in seconds
+  uint32 window_seconds = 2;
+}
+
+// Rate limit status
+message RateLimitStatus {
+  // Maximum requests allowed
+  uint32 limit = 1;
+
+  // Remaining requests in current window
+  uint32 remaining = 2;
+
+  // Seconds until window resets
+  uint32 reset_seconds = 3;
+}
+
+// ============================================================================
+// Pagination
+// ============================================================================
+
+// Pagination request parameters
+message PageRequest {
+  // Page number (1-indexed)
+  uint32 page = 1;
+
+  // Items per page (max 100)
+  uint32 page_size = 2;
+
+  // Cursor for cursor-based pagination (alternative to page)
+  string cursor = 3;
+}
+
+// Pagination response metadata
+message PageResponse {
+  // Total number of items
+  uint64 total_count = 1;
+
+  // Current page number
+  uint32 current_page = 2;
+
+  // Total number of pages
+  uint32 total_pages = 3;
+
+  // Next page cursor (for cursor-based pagination)
+  string next_cursor = 4;
+
+  // Whether there are more items
+  bool has_more = 5;
+}
+
+// ============================================================================
+// Health Check (standard gRPC health)
+// ============================================================================
+
+// Health check request
+message HealthCheckRequest {
+  // Service name to check (empty for overall)
+  string service = 1;
+}
+
+// Health check response
+message HealthCheckResponse {
+  // Service health status
+  enum ServingStatus {
+    SERVING_STATUS_UNKNOWN = 0;
+    SERVING_STATUS_SERVING = 1;
+    SERVING_STATUS_NOT_SERVING = 2;
+  }
+
+  ServingStatus status = 1;
+}
