@@ -55,14 +55,21 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dashmap",
+ "hex",
  "hmac",
  "jsonwebtoken",
  "moka",
+ "reqwest",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
  "tracing",
+ "url",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
