@@ -1,7 +1,5 @@
 //! MCP Server implementation
 
-use std::sync::Arc;
-
 /// Argus MCP Server
 ///
 /// Provides MCP tools for auth and billing operations.
