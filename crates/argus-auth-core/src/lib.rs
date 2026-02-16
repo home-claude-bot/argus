@@ -5,6 +5,12 @@
 //! - Session management with HMAC-signed cookies
 //! - Tier and entitlement checks with caching
 //!
+//! # Security Features
+//!
+//! - **Constant-time signature verification** - Prevents timing attacks
+//! - **Strict session validation** - Unknown sessions are rejected
+//! - **JWKS caching with rotation** - Efficient key management
+//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -16,7 +22,7 @@
 //!     "us-east-1_xxxxx",  // Cognito pool ID
 //!     "us-east-1",        // AWS region
 //!     "client-id",        // App client ID
-//!     "session-secret",   // HMAC secret
+//!     "session-secret",   // HMAC secret (min 32 bytes)
 //! );
 //!
 //! // Create service
@@ -35,6 +41,7 @@
 //! ```
 
 pub mod config;
+pub mod crypto;
 pub mod entitlement;
 pub mod error;
 pub mod service;
@@ -43,8 +50,9 @@ pub mod token;
 
 // Re-exports
 pub use config::AuthConfig;
+pub use crypto::{constant_time_eq, hash_token, HmacKey};
 pub use entitlement::EntitlementChecker;
 pub use error::AuthError;
 pub use service::{AuthService, ClaimsSource, ValidatedClaims};
-pub use session::{SessionManager, SessionPayload};
+pub use session::{extract_tier_from_groups, SessionManager, SessionPayload};
 pub use token::{CognitoClaims, Jwk, Jwks, TokenValidator};

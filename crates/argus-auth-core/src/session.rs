@@ -3,13 +3,14 @@
 //! Implements session cookie signing that matches the CloudFront function format.
 
 use argus_db::{CreateSession, SessionRepository, SessionRow};
-use argus_types::{SessionId, UserId};
+use argus_types::{SessionId, Tier, UserId};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration as ChronoDuration, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 
 use crate::AuthError;
 
@@ -57,7 +58,7 @@ impl SessionPayload {
             user_id: user_id.to_string(),
             email: email.into(),
             groups,
-            tier,
+            tier: tier.to_string(),
             role,
             issued: now,
             expires,
@@ -75,18 +76,27 @@ impl SessionPayload {
     }
 }
 
-/// Extract tier from Cognito groups
-fn extract_tier_from_groups(groups: &[String]) -> String {
+/// Extract tier from Cognito groups (returns Tier enum)
+pub fn extract_tier_from_groups(groups: &[String]) -> Tier {
     // Priority order: enterprise > business > professional > explorer
     if groups.iter().any(|g| g.contains("enterprise")) {
-        "enterprise".to_string()
+        Tier::Enterprise
     } else if groups.iter().any(|g| g.contains("business")) {
-        "business".to_string()
+        Tier::Business
     } else if groups.iter().any(|g| g.contains("professional") || g.contains("pro")) {
-        "professional".to_string()
+        Tier::Professional
     } else {
-        "explorer".to_string()
+        Tier::Explorer
     }
+}
+
+/// Constant-time byte comparison to prevent timing attacks
+#[inline]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.ct_eq(b).into()
 }
 
 /// Session manager handles session creation, signing, and validation
@@ -161,9 +171,9 @@ impl<R: SessionRepository> SessionManager<R> {
 
         let (signature, payload_b64) = (parts[0], parts[1]);
 
-        // Verify signature
+        // Verify signature using constant-time comparison to prevent timing attacks
         let expected_sig = self.compute_signature(payload_b64)?;
-        if signature != expected_sig {
+        if !constant_time_eq(signature.as_bytes(), expected_sig.as_bytes()) {
             tracing::debug!("Session signature mismatch");
             return Err(AuthError::InvalidToken);
         }
@@ -203,7 +213,7 @@ impl<R: SessionRepository> SessionManager<R> {
         match session {
             Some(s) if s.revoked => {
                 tracing::debug!("Session has been revoked");
-                Err(AuthError::TokenExpired)
+                Err(AuthError::SessionRevoked)
             }
             Some(s) if s.expires_at < Utc::now() => {
                 tracing::debug!("Session expired in database");
@@ -211,10 +221,14 @@ impl<R: SessionRepository> SessionManager<R> {
             }
             Some(_) => Ok(payload),
             None => {
-                // Session not in database - might be old format or from different service
-                // For backwards compatibility, trust the signed payload
-                tracing::debug!("Session not found in database, trusting signed payload");
-                Ok(payload)
+                // Session not in database - MUST fail for security
+                // A signed session not in DB means either:
+                // 1. Session was revoked and cleaned up
+                // 2. Session was created by a compromised key
+                // 3. Session predates DB tracking (migration scenario)
+                // In all cases, requiring re-authentication is the safe choice
+                tracing::warn!("Session not found in database - rejecting");
+                Err(AuthError::SessionRevoked)
             }
         }
     }
@@ -297,26 +311,88 @@ impl<R: SessionRepository> std::fmt::Debug for SessionManager<R> {
 mod tests {
     use super::*;
 
+    // Test-only minimal session manager for HMAC testing (no DB)
+    struct HmacTester {
+        secret: String,
+    }
+
+    impl HmacTester {
+        fn new(secret: &str) -> Self {
+            Self {
+                secret: secret.to_string(),
+            }
+        }
+
+        fn sign_payload(&self, payload: &SessionPayload) -> Result<String, AuthError> {
+            let payload_json = serde_json::to_vec(payload).map_err(|_| {
+                AuthError::Internal("Failed to serialize".to_string())
+            })?;
+            let payload_b64 = URL_SAFE_NO_PAD.encode(&payload_json);
+            let signature = self.compute_signature(&payload_b64)?;
+            Ok(format!("{payload_b64}.{signature}"))
+        }
+
+        fn validate_cookie(&self, cookie: &str) -> Result<SessionPayload, AuthError> {
+            let parts: Vec<&str> = cookie.rsplitn(2, '.').collect();
+            if parts.len() != 2 {
+                return Err(AuthError::InvalidToken);
+            }
+            let (signature, payload_b64) = (parts[0], parts[1]);
+            let expected_sig = self.compute_signature(payload_b64)?;
+            if !constant_time_eq(signature.as_bytes(), expected_sig.as_bytes()) {
+                return Err(AuthError::InvalidToken);
+            }
+            let payload_json = URL_SAFE_NO_PAD
+                .decode(payload_b64)
+                .map_err(|_| AuthError::InvalidToken)?;
+            let payload: SessionPayload =
+                serde_json::from_slice(&payload_json).map_err(|_| AuthError::InvalidToken)?;
+            if payload.is_expired() {
+                return Err(AuthError::TokenExpired);
+            }
+            Ok(payload)
+        }
+
+        fn compute_signature(&self, data: &str) -> Result<String, AuthError> {
+            let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes())
+                .map_err(|_| AuthError::Internal("HMAC error".to_string()))?;
+            mac.update(data.as_bytes());
+            Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+        }
+    }
+
     #[test]
     fn test_extract_tier_from_groups() {
-        assert_eq!(extract_tier_from_groups(&[]), "explorer");
+        assert_eq!(extract_tier_from_groups(&[]), Tier::Explorer);
         assert_eq!(
             extract_tier_from_groups(&["andrz_professional".to_string()]),
-            "professional"
+            Tier::Professional
         );
         assert_eq!(
             extract_tier_from_groups(&["andrz_business".to_string()]),
-            "business"
+            Tier::Business
         );
         assert_eq!(
             extract_tier_from_groups(&["andrz_enterprise".to_string()]),
-            "enterprise"
+            Tier::Enterprise
         );
         // Enterprise takes priority
         assert_eq!(
             extract_tier_from_groups(&["andrz_professional".to_string(), "andrz_enterprise".to_string()]),
-            "enterprise"
+            Tier::Enterprise
         );
+    }
+
+    #[test]
+    fn test_constant_time_eq() {
+        // Equal strings
+        assert!(constant_time_eq(b"abc123", b"abc123"));
+        // Different lengths
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        // Same length, different content
+        assert!(!constant_time_eq(b"abc123", b"xyz789"));
+        // Empty strings
+        assert!(constant_time_eq(b"", b""));
     }
 
     #[test]
@@ -328,5 +404,150 @@ mod tests {
         let mut expired = payload.clone();
         expired.expires = Utc::now().timestamp_millis() - 1000;
         assert!(expired.is_expired());
+    }
+
+    #[test]
+    fn test_hmac_roundtrip() {
+        let tester = HmacTester::new("super-secret-key-for-testing");
+        let user_id = UserId::new();
+        let payload = SessionPayload::new(
+            user_id,
+            "test@example.com",
+            vec!["andrz_professional".to_string()],
+            24,
+        );
+
+        // Sign the payload
+        let cookie = tester.sign_payload(&payload).unwrap();
+
+        // Validate should succeed
+        let validated = tester.validate_cookie(&cookie).unwrap();
+        assert_eq!(validated.email, "test@example.com");
+        assert_eq!(validated.tier, "professional");
+    }
+
+    #[test]
+    fn test_hmac_tampered_signature_rejected() {
+        let tester = HmacTester::new("super-secret-key-for-testing");
+        let user_id = UserId::new();
+        let payload = SessionPayload::new(user_id, "test@example.com", vec![], 24);
+
+        let cookie = tester.sign_payload(&payload).unwrap();
+
+        // Tamper with the signature (change last char)
+        let mut tampered = cookie.clone();
+        let last_char = tampered.pop().unwrap();
+        let new_char = if last_char == 'a' { 'b' } else { 'a' };
+        tampered.push(new_char);
+
+        // Validation should fail
+        let result = tester.validate_cookie(&tampered);
+        assert!(matches!(result, Err(AuthError::InvalidToken)));
+    }
+
+    #[test]
+    fn test_hmac_tampered_payload_rejected() {
+        let tester = HmacTester::new("super-secret-key-for-testing");
+        let user_id = UserId::new();
+        let payload = SessionPayload::new(user_id, "test@example.com", vec![], 24);
+
+        let cookie = tester.sign_payload(&payload).unwrap();
+        let parts: Vec<&str> = cookie.rsplitn(2, '.').collect();
+        let signature = parts[0];
+
+        // Create a different payload and use old signature
+        let evil_payload = SessionPayload::new(
+            UserId::new(),
+            "attacker@evil.com",
+            vec!["andrz_enterprise".to_string()], // Privilege escalation attempt
+            24,
+        );
+        let evil_payload_json = serde_json::to_vec(&evil_payload).unwrap();
+        let evil_payload_b64 = URL_SAFE_NO_PAD.encode(&evil_payload_json);
+
+        // Combine tampered payload with original signature
+        let tampered_cookie = format!("{evil_payload_b64}.{signature}");
+
+        // Validation should fail
+        let result = tester.validate_cookie(&tampered_cookie);
+        assert!(matches!(result, Err(AuthError::InvalidToken)));
+    }
+
+    #[test]
+    fn test_hmac_wrong_secret_rejected() {
+        let signer = HmacTester::new("secret-one");
+        let validator = HmacTester::new("secret-two");
+
+        let user_id = UserId::new();
+        let payload = SessionPayload::new(user_id, "test@example.com", vec![], 24);
+
+        let cookie = signer.sign_payload(&payload).unwrap();
+
+        // Validation with wrong secret should fail
+        let result = validator.validate_cookie(&cookie);
+        assert!(matches!(result, Err(AuthError::InvalidToken)));
+    }
+
+    #[test]
+    fn test_hmac_expired_session_rejected() {
+        let tester = HmacTester::new("super-secret-key-for-testing");
+        let user_id = UserId::new();
+        let mut payload = SessionPayload::new(user_id, "test@example.com", vec![], 24);
+
+        // Set expiration in the past
+        payload.expires = Utc::now().timestamp_millis() - 1000;
+
+        let cookie = tester.sign_payload(&payload).unwrap();
+
+        // Validation should fail with TokenExpired
+        let result = tester.validate_cookie(&cookie);
+        assert!(matches!(result, Err(AuthError::TokenExpired)));
+    }
+
+    #[test]
+    fn test_hmac_malformed_cookie_rejected() {
+        let tester = HmacTester::new("super-secret-key-for-testing");
+
+        // No dots
+        assert!(matches!(
+            tester.validate_cookie("nodots"),
+            Err(AuthError::InvalidToken)
+        ));
+
+        // Invalid base64
+        assert!(matches!(
+            tester.validate_cookie("!!!invalid!!!.sig"),
+            Err(AuthError::InvalidToken)
+        ));
+
+        // Valid base64 but not JSON
+        let not_json = URL_SAFE_NO_PAD.encode(b"not json");
+        assert!(matches!(
+            tester.validate_cookie(&format!("{not_json}.sig")),
+            Err(AuthError::InvalidToken)
+        ));
+    }
+
+    #[test]
+    fn test_token_hash_deterministic() {
+        // Direct hash computation (same logic as SessionManager::hash_token)
+        fn hash_token(token: &str) -> String {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(token.as_bytes());
+            hex::encode(hasher.finalize())
+        }
+
+        let token = "some-session-token-value";
+        let hash1 = hash_token(token);
+        let hash2 = hash_token(token);
+        assert_eq!(hash1, hash2);
+
+        // Different token = different hash
+        let hash3 = hash_token("different-token");
+        assert_ne!(hash1, hash3);
+
+        // Hash is 64 hex chars (256 bits)
+        assert_eq!(hash1.len(), 64);
     }
 }

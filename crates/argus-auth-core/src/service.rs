@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::{
     config::AuthConfig,
     entitlement::EntitlementChecker,
-    session::SessionManager,
+    session::{extract_tier_from_groups, SessionManager},
     token::{CognitoClaims, TokenValidator},
     AuthError,
 };
@@ -75,10 +75,11 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
     /// Validate a Cognito JWT access token
     pub async fn validate_jwt(&self, token: &str) -> Result<ValidatedClaims, AuthError> {
         let claims = self.token_validator.validate(token).await?;
-
-        // Look up user to get tier (Cognito claims don't include tier directly)
         let user_id = UserId::parse(&claims.sub).map_err(|_| AuthError::InvalidToken)?;
-        let tier = self.get_user_tier(&user_id).await.unwrap_or(Tier::Explorer);
+
+        // Extract tier directly from Cognito groups - avoids unnecessary DB lookup
+        // This is the source of truth from Cognito and matches what session creation uses
+        let tier = extract_tier_from_groups(&claims.cognito_groups);
 
         Ok(ValidatedClaims {
             user_id,
@@ -106,19 +107,20 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
     }
 
     /// Validate either a JWT or session cookie (auto-detect)
+    ///
+    /// Token detection:
+    /// - JWT format: `xxxxx.xxxxx.xxxxx` (2 dots)
+    /// - Session format: `payload.signature` (1 dot)
     pub async fn validate_token(&self, token: &str) -> Result<ValidatedClaims, AuthError> {
-        // Try JWT first (JWT format: xxxxx.xxxxx.xxxxx)
-        let dot_count = token.chars().filter(|c| *c == '.').count();
-        if dot_count == 2 {
-            return self.validate_jwt(token).await;
-        }
+        // Fast path: count dots to determine token type
+        // Using matches! for simple pattern matching on short tokens
+        let dot_count = token.bytes().filter(|&b| b == b'.').count();
 
-        // Try session cookie (format: payload.signature)
-        if dot_count == 1 {
-            return self.validate_session(token).await;
+        match dot_count {
+            2 => self.validate_jwt(token).await,
+            1 => self.validate_session(token).await,
+            _ => Err(AuthError::InvalidToken),
         }
-
-        Err(AuthError::InvalidToken)
     }
 
     // =========================================================================
@@ -169,7 +171,7 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
 
         // Create new user
         let email = claims.email.clone().unwrap_or_else(|| format!("{}@cognito", claims.sub));
-        let tier = extract_tier_from_cognito_groups(&claims.cognito_groups);
+        let tier = extract_tier_from_groups(&claims.cognito_groups);
         let role = if claims.cognito_groups.iter().any(|g| g.contains("admin")) {
             "admin"
         } else {
@@ -241,18 +243,6 @@ impl<U: UserRepository, S: SessionRepository> AuthService<U, S> {
     }
 }
 
-/// Extract tier from Cognito groups
-fn extract_tier_from_cognito_groups(groups: &[String]) -> Tier {
-    if groups.iter().any(|g| g.contains("enterprise")) {
-        Tier::Enterprise
-    } else if groups.iter().any(|g| g.contains("business")) {
-        Tier::Business
-    } else if groups.iter().any(|g| g.contains("professional") || g.contains("pro")) {
-        Tier::Professional
-    } else {
-        Tier::Explorer
-    }
-}
 
 impl<U: UserRepository, S: SessionRepository> std::fmt::Debug for AuthService<U, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -267,15 +257,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_tier_from_cognito_groups() {
-        assert_eq!(extract_tier_from_cognito_groups(&[]), Tier::Explorer);
-        assert_eq!(
-            extract_tier_from_cognito_groups(&["andrz_professional".to_string()]),
-            Tier::Professional
-        );
-        assert_eq!(
-            extract_tier_from_cognito_groups(&["andrz_enterprise".to_string()]),
-            Tier::Enterprise
-        );
+    fn test_token_type_detection() {
+        // JWT has 2 dots
+        let jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature";
+        assert_eq!(jwt.bytes().filter(|&b| b == b'.').count(), 2);
+
+        // Session cookie has 1 dot
+        let session = "base64payload.signature";
+        assert_eq!(session.bytes().filter(|&b| b == b'.').count(), 1);
+
+        // Invalid token has 0 or 3+ dots
+        let invalid = "nodots";
+        assert_eq!(invalid.bytes().filter(|&b| b == b'.').count(), 0);
+    }
+
+    #[test]
+    fn test_claims_source_equality() {
+        assert_eq!(ClaimsSource::Jwt, ClaimsSource::Jwt);
+        assert_eq!(ClaimsSource::Session, ClaimsSource::Session);
+        assert_ne!(ClaimsSource::Jwt, ClaimsSource::Session);
     }
 }

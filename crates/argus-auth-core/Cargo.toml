@@ -32,6 +32,7 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 hex = { workspace = true }
+subtle = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

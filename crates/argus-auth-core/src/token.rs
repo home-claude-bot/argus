@@ -6,6 +6,7 @@ use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use subtle::ConstantTimeEq;
 
 use crate::{AuthConfig, AuthError};
 
@@ -64,29 +65,64 @@ impl CognitoClaims {
 }
 
 /// Token validator with JWKS caching
+///
+/// Security features:
+/// - Caches full JWKS to prevent fetch flooding attacks
+/// - Rejects unknown key IDs without triggering refetch
+/// - Uses constant-time comparison for client ID validation
 #[derive(Clone)]
 pub struct TokenValidator {
     config: AuthConfig,
     http_client: reqwest::Client,
     /// Cache of kid -> DecodingKey
     key_cache: Cache<String, Arc<DecodingKey>>,
+    /// Cache of known valid key IDs (prevents fetch flooding)
+    /// Maps "jwks" -> list of known kids
+    jwks_kids_cache: Cache<String, Arc<Vec<String>>>,
 }
 
 impl TokenValidator {
-    /// Create a new token validator
+    /// Create a new token validator with optimized HTTP client
+    ///
+    /// The HTTP client is configured for low-latency JWKS fetching:
+    /// - Connection pooling with idle timeout
+    /// - Aggressive timeouts to fail fast
+    /// - Connection reuse for efficiency
+    ///
+    /// Security: JWKS fetching is protected against flooding attacks by
+    /// caching known key IDs and rejecting unknown IDs without refetching.
     pub fn new(config: AuthConfig) -> Self {
         let cache_duration = config.jwks_cache_duration;
+
+        // Optimized HTTP client for JWKS fetching
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(2) // JWKS is typically one host
+            .tcp_keepalive(Duration::from_secs(60))
+            .tcp_nodelay(true) // Disable Nagle for lower latency
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             config,
-            http_client: reqwest::Client::new(),
+            http_client,
             key_cache: Cache::builder()
                 .time_to_live(cache_duration)
                 .max_capacity(100)
+                .build(),
+            jwks_kids_cache: Cache::builder()
+                .time_to_live(cache_duration)
+                .max_capacity(1) // Only one entry: "jwks" -> kids list
                 .build(),
         }
     }
 
     /// Create a validator with custom HTTP client
+    ///
+    /// Use this when you need custom proxy settings, TLS config, or
+    /// want to share an HTTP client across services.
     pub fn with_client(config: AuthConfig, http_client: reqwest::Client) -> Self {
         let cache_duration = config.jwks_cache_duration;
         Self {
@@ -95,6 +131,10 @@ impl TokenValidator {
             key_cache: Cache::builder()
                 .time_to_live(cache_duration)
                 .max_capacity(100)
+                .build(),
+            jwks_kids_cache: Cache::builder()
+                .time_to_live(cache_duration)
+                .max_capacity(1)
                 .build(),
         }
     }
@@ -133,13 +173,18 @@ impl TokenValidator {
 
         let claims = token_data.claims;
 
-        // Validate client ID
-        let token_client_id = claims.get_client_id();
-        if token_client_id != Some(&self.config.cognito_client_id) {
+        // Validate client ID using constant-time comparison to prevent timing attacks
+        let valid_client_id = claims.get_client_id().is_some_and(|id| {
+            id.as_bytes()
+                .ct_eq(self.config.cognito_client_id.as_bytes())
+                .into()
+        });
+
+        if !valid_client_id {
             tracing::debug!(
                 "Client ID mismatch: expected {}, got {:?}",
                 self.config.cognito_client_id,
-                token_client_id
+                claims.get_client_id()
             );
             return Err(AuthError::InvalidToken);
         }
@@ -153,14 +198,37 @@ impl TokenValidator {
     }
 
     /// Get a decoding key for the given kid
+    ///
+    /// Security: This method is protected against JWKS fetch flooding attacks.
+    /// If we have a cached list of known key IDs, we reject unknown IDs
+    /// immediately without triggering a refetch.
     async fn get_key(&self, kid: &str) -> Result<Arc<DecodingKey>, AuthError> {
-        // Check cache first
+        // Check key cache first (fast path)
         if let Some(key) = self.key_cache.get(kid).await {
             return Ok(key);
         }
 
-        // Fetch JWKS
+        // Check if we have a cached list of known kids
+        // If yes and kid isn't in it, reject immediately (no refetch)
+        if let Some(known_kids) = self.jwks_kids_cache.get("jwks").await {
+            if !known_kids.contains(&kid.to_string()) {
+                tracing::debug!(
+                    "Unknown key ID '{}' not in cached JWKS (known: {:?})",
+                    kid,
+                    known_kids.as_ref()
+                );
+                return Err(AuthError::InvalidToken);
+            }
+        }
+
+        // Fetch JWKS (either no cache or kid might be in known list)
         let jwks = self.fetch_jwks().await?;
+
+        // Cache the list of known kids to prevent future flooding
+        let kids: Vec<String> = jwks.keys.iter().map(|k| k.kid.clone()).collect();
+        self.jwks_kids_cache
+            .insert("jwks".to_string(), Arc::new(kids))
+            .await;
 
         // Find the key with matching kid
         let jwk = jwks.keys.iter().find(|k| k.kid == kid).ok_or_else(|| {
@@ -213,9 +281,13 @@ impl TokenValidator {
         })
     }
 
-    /// Invalidate the key cache (useful when keys rotate)
+    /// Invalidate all caches (useful when keys rotate)
+    ///
+    /// This clears both the decoding key cache and the known kids cache,
+    /// forcing a fresh JWKS fetch on the next validation.
     pub async fn invalidate_cache(&self) {
         self.key_cache.invalidate_all();
+        self.jwks_kids_cache.invalidate_all();
     }
 }
 
