@@ -16,8 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_client(true)
         // Include file descriptors for reflection
         .file_descriptor_set_path(
-            std::path::PathBuf::from(std::env::var("OUT_DIR")?)
-                .join("argus_descriptor.bin"),
+            std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("argus_descriptor.bin"),
         )
         // Compile all proto files
         .compile(&proto_files, &["proto"])?;
