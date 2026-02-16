@@ -39,6 +39,11 @@ cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 cast_precision_loss = "allow"
 cast_lossless = "allow"
+# SQL strings and docs
+needless_raw_string_hashes = "allow"
+doc_markdown = "allow"
+# Wildcard imports in internal modules
+wildcard_imports = "allow"
 
 [workspace.dependencies]
 # Async runtime
