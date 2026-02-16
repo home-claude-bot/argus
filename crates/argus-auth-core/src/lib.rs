@@ -3,8 +3,8 @@
 //! Core authentication functionality including Cognito integration,
 //! session management, and tier/entitlement checks.
 
-pub mod service;
 pub mod error;
+pub mod service;
 
-pub use service::*;
 pub use error::*;
+pub use service::*;

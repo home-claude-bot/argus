@@ -19,12 +19,12 @@
 //! server.serve(transport).await?;
 //! ```
 
-pub mod server;
-pub mod tools;
-pub mod resources;
-pub mod prompts;
 pub mod auth;
 pub mod error;
+pub mod prompts;
+pub mod resources;
+pub mod server;
+pub mod tools;
 
-pub use server::ArgusMcpServer;
 pub use error::McpError;
+pub use server::ArgusMcpServer;

@@ -1,0 +1,9 @@
+# Audit configuration for Argus
+# See: https://rustsec.org/advisories/
+
+[advisories]
+# RUSTSEC-2023-0071: rsa Marvin Attack
+# This comes from sqlx-mysql which is a build-time dependency of sqlx-macros.
+# We only use PostgreSQL, not MySQL, so this doesn't affect us.
+# No fix is available upstream.
+ignore = ["RUSTSEC-2023-0071"]
