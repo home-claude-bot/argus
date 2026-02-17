@@ -35,6 +35,12 @@ impl std::fmt::Display for SessionId {
     }
 }
 
+impl From<Uuid> for SessionId {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
+
 /// User session
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {

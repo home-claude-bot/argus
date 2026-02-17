@@ -75,23 +75,26 @@ impl<R: UserRepository> EntitlementChecker<R> {
         let tier_features = tier.features();
         let allowed = tier_features.contains(&feature);
 
+        // Find the minimum tier that has this feature
+        let required_tier = find_min_tier_for_feature(feature).unwrap_or(Tier::Explorer);
+
         if allowed {
             Ok(EntitlementCheck {
                 allowed: true,
                 reason: None,
                 remaining: None,
+                tier,
+                required_tier,
             })
         } else {
-            // Find the minimum tier that has this feature
-            let required_tier = find_min_tier_for_feature(feature);
             Ok(EntitlementCheck {
                 allowed: false,
                 reason: Some(format!(
-                    "Feature '{}' requires {} tier or higher",
-                    feature,
-                    required_tier.map_or("unknown".to_string(), |t| t.to_string())
+                    "Feature '{feature}' requires {required_tier} tier or higher"
                 )),
                 remaining: None,
+                tier,
+                required_tier,
             })
         }
     }
@@ -113,6 +116,8 @@ impl<R: UserRepository> EntitlementChecker<R> {
                 allowed: true,
                 reason: None,
                 remaining: None,
+                tier,
+                required_tier: min_tier,
             })
         } else {
             Ok(EntitlementCheck {
@@ -121,6 +126,8 @@ impl<R: UserRepository> EntitlementChecker<R> {
                     "Feature '{feature}' requires {min_tier} tier or higher"
                 )),
                 remaining: None,
+                tier,
+                required_tier: min_tier,
             })
         }
     }

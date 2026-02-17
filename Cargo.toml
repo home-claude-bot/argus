@@ -51,11 +51,12 @@ unused_async = "allow"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
+futures = "0.3"
 
 # Web framework
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "cors", "request-id", "propagate-header"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "request-id", "propagate-header", "timeout"] }
 
 # gRPC
 tonic = "0.11"

@@ -30,3 +30,9 @@ impl std::fmt::Display for UserId {
         write!(f, "{}", self.0)
     }
 }
+
+impl From<Uuid> for UserId {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
