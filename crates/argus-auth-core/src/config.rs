@@ -22,6 +22,8 @@ pub struct AuthConfig {
     pub session_duration: Duration,
     /// JWKS cache duration
     pub jwks_cache_duration: Duration,
+    /// Override JWKS URL (for testing only)
+    jwks_url_override: Option<String>,
 }
 
 /// Secret bytes wrapper that never exposes content in Debug/Display
@@ -110,6 +112,7 @@ impl AuthConfig {
             session_secret: SecretBytes::from_string(secret),
             session_duration: Duration::from_secs(24 * 60 * 60), // 24 hours
             jwks_cache_duration: Duration::from_secs(60 * 60),   // 1 hour
+            jwks_url_override: None,
         })
     }
 
@@ -129,7 +132,18 @@ impl AuthConfig {
 
     /// Get the JWKS URL
     pub fn jwks_url(&self) -> String {
-        format!("{}/.well-known/jwks.json", self.cognito_issuer())
+        self.jwks_url_override
+            .clone()
+            .unwrap_or_else(|| format!("{}/.well-known/jwks.json", self.cognito_issuer()))
+    }
+
+    /// Override the JWKS URL (for testing purposes only)
+    ///
+    /// This should only be used in integration tests to point to a mock JWKS server.
+    /// In production, the JWKS URL is derived from the Cognito pool configuration.
+    pub fn with_jwks_url_override(mut self, url: impl Into<String>) -> Self {
+        self.jwks_url_override = Some(url.into());
+        self
     }
 
     /// Set session duration
@@ -154,6 +168,7 @@ impl std::fmt::Debug for AuthConfig {
             .field("session_secret", &self.session_secret) // Uses SecretBytes Debug
             .field("session_duration", &self.session_duration)
             .field("jwks_cache_duration", &self.jwks_cache_duration)
+            .field("jwks_url_override", &self.jwks_url_override)
             .finish()
     }
 }

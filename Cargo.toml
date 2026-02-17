@@ -102,6 +102,8 @@ hex = "0.4"
 # Testing
 tokio-test = "0.4"
 wiremock = "0.6"
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [profile.dev]
 debug = 0

@@ -38,3 +38,13 @@ zeroize = { workspace = true }
 [dev-dependencies]
 tokio-test = { workspace = true }
 wiremock = { workspace = true }
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "bench_token"
+harness = false
+
+[[bench]]
+name = "bench_session"
+harness = false
