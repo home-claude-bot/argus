@@ -109,7 +109,8 @@ impl AuthService for GrpcAuthService {
                 }
             }
             Err(e) => {
-                metrics::counter!("auth_token_validations_total", "result" => "invalid").increment(1);
+                metrics::counter!("auth_token_validations_total", "result" => "invalid")
+                    .increment(1);
                 ValidateTokenResponse {
                     valid: false,
                     claims: None,

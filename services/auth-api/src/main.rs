@@ -220,9 +220,7 @@ async fn run_grpc_server(state: AppState, addr: SocketAddr) -> anyhow::Result<()
 fn setup_metrics() -> anyhow::Result<PrometheusHandle> {
     // Latency buckets optimized for auth operations
     // Most auth ops should complete in <50ms, SLO at <100ms p99
-    let auth_latency_buckets = &[
-        0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
-    ];
+    let auth_latency_buckets = &[0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0];
 
     let builder = PrometheusBuilder::new()
         .set_buckets_for_metric(
@@ -245,14 +243,8 @@ fn setup_metrics() -> anyhow::Result<PrometheusHandle> {
         "auth_token_validations_total",
         "Total token validation attempts by result (valid/invalid/batch)"
     );
-    metrics::describe_counter!(
-        "auth_sessions_created_total",
-        "Total sessions created"
-    );
-    metrics::describe_counter!(
-        "auth_sessions_revoked_total",
-        "Total sessions revoked"
-    );
+    metrics::describe_counter!("auth_sessions_created_total", "Total sessions created");
+    metrics::describe_counter!("auth_sessions_revoked_total", "Total sessions revoked");
     metrics::describe_counter!(
         "auth_entitlement_checks_total",
         "Total entitlement checks by result"
