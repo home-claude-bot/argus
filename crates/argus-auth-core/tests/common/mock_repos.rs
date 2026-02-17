@@ -109,7 +109,13 @@ impl UserRepository for MockUserRepository {
     }
 
     async fn delete(&self, id: Uuid) -> DbResult<()> {
-        self.users.remove(&id);
+        // Remove from main store and clean up indices
+        if let Some((_, user)) = self.users.remove(&id) {
+            self.by_email.remove(&user.email);
+            if let Some(ref sub) = user.cognito_sub {
+                self.by_cognito_sub.remove(sub);
+            }
+        }
         Ok(())
     }
 }

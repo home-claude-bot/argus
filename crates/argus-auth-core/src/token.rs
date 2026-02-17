@@ -198,8 +198,9 @@ impl TokenValidator {
     /// Get a decoding key for the given kid
     ///
     /// Security: This method is protected against JWKS fetch flooding attacks.
-    /// If we have a cached list of known key IDs, we reject unknown IDs
-    /// immediately without triggering a refetch.
+    /// - Uses request coalescing (try_get_with) to ensure only one JWKS fetch
+    ///   per key ID, even under concurrent load
+    /// - Caches list of known key IDs to reject unknown IDs without refetch
     async fn get_key(&self, kid: &str) -> Result<Arc<DecodingKey>, AuthError> {
         // Check key cache first (fast path)
         if let Some(key) = self.key_cache.get(kid).await {
@@ -220,12 +221,47 @@ impl TokenValidator {
             }
         }
 
-        // Fetch JWKS (either no cache or kid might be in known list)
-        let jwks = self.fetch_jwks().await?;
+        // Use try_get_with for request coalescing - concurrent requests for the
+        // same kid will wait for the first one to complete instead of all fetching.
+        // This is critical for preventing JWKS fetch flooding under concurrent load.
+        let kid_owned = kid.to_string();
+        let key_cache = self.key_cache.clone();
+        let jwks_kids_cache = self.jwks_kids_cache.clone();
+        let http_client = self.http_client.clone();
+        let config = self.config.clone();
+
+        self.key_cache
+            .try_get_with(kid_owned.clone(), async move {
+                Self::fetch_and_cache_key_inner(
+                    kid_owned,
+                    http_client,
+                    config,
+                    key_cache,
+                    jwks_kids_cache,
+                )
+                .await
+            })
+            .await
+            .map_err(|arc_err| (*arc_err).clone())
+    }
+
+    /// Internal helper: fetch JWKS and cache the requested key
+    ///
+    /// This is called via try_get_with which ensures only one concurrent
+    /// execution per key ID (request coalescing).
+    async fn fetch_and_cache_key_inner(
+        kid: String,
+        http_client: reqwest::Client,
+        config: AuthConfig,
+        key_cache: Cache<String, Arc<DecodingKey>>,
+        jwks_kids_cache: Cache<String, Arc<Vec<String>>>,
+    ) -> Result<Arc<DecodingKey>, AuthError> {
+        // Fetch JWKS
+        let jwks = Self::fetch_jwks_inner(&http_client, &config).await?;
 
         // Cache the list of known kids to prevent future flooding
         let kids: Vec<String> = jwks.keys.iter().map(|k| k.kid.clone()).collect();
-        self.jwks_kids_cache
+        jwks_kids_cache
             .insert("jwks".to_string(), Arc::new(kids))
             .await;
 
@@ -235,7 +271,7 @@ impl TokenValidator {
             AuthError::InvalidToken
         })?;
 
-        // Create decoding key
+        // Create decoding key for the requested kid
         let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|e| {
             tracing::error!("Failed to create decoding key: {}", e);
             AuthError::Internal("Failed to create decoding key".to_string())
@@ -243,23 +279,27 @@ impl TokenValidator {
 
         let key = Arc::new(decoding_key);
 
-        // Cache all keys from the JWKS
+        // Pre-cache all OTHER keys from the JWKS (current one will be cached by try_get_with)
         for k in &jwks.keys {
-            if let Ok(dk) = DecodingKey::from_rsa_components(&k.n, &k.e) {
-                self.key_cache.insert(k.kid.clone(), Arc::new(dk)).await;
+            if k.kid != kid {
+                if let Ok(dk) = DecodingKey::from_rsa_components(&k.n, &k.e) {
+                    key_cache.insert(k.kid.clone(), Arc::new(dk)).await;
+                }
             }
         }
 
         Ok(key)
     }
 
-    /// Fetch JWKS from Cognito
-    async fn fetch_jwks(&self) -> Result<Jwks, AuthError> {
-        let url = self.config.jwks_url();
+    /// Static version of fetch_jwks for use in the async closure
+    async fn fetch_jwks_inner(
+        http_client: &reqwest::Client,
+        config: &AuthConfig,
+    ) -> Result<Jwks, AuthError> {
+        let url = config.jwks_url();
         tracing::debug!("Fetching JWKS from {}", url);
 
-        let response = self
-            .http_client
+        let response = http_client
             .get(&url)
             .timeout(Duration::from_secs(10))
             .send()

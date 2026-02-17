@@ -92,8 +92,7 @@ async fn test_wrong_issuer_returns_invalid_token() {
     let keypair = TestKeyPair::load();
 
     // Create claims with wrong issuer
-    let claims =
-        TestCognitoClaims::valid("https://wrong-issuer.com/wrong-pool", TEST_CLIENT_ID);
+    let claims = TestCognitoClaims::valid("https://wrong-issuer.com/wrong-pool", TEST_CLIENT_ID);
     let token = keypair.sign(&claims);
 
     // Validate should fail
@@ -144,10 +143,7 @@ async fn test_jwt_with_cognito_groups() {
 
     // Create claims with Cognito groups
     let claims = TestCognitoClaims::valid(&config.cognito_issuer(), TEST_CLIENT_ID)
-        .with_groups(vec![
-            "org_enterprise".to_string(),
-            "org_admin".to_string(),
-        ]);
+        .with_groups(vec!["org_enterprise".to_string(), "org_admin".to_string()]);
     let token = keypair.sign(&claims);
 
     // Validate
@@ -192,8 +188,10 @@ async fn test_malformed_jwt_returns_invalid_token() {
 
 #[tokio::test]
 async fn test_jwks_caching_prevents_refetch() {
-    let mock_server = JwksMockServer::start().await;
+    // Start bare server and mount JWKS with exactly 1 expected call
+    let mock_server = JwksMockServer::start_bare().await;
     let config = create_test_config(&mock_server.url());
+    let _guard = mock_server.expect_jwks_calls(1).await;
 
     let validator = TokenValidator::new(config.clone());
     let keypair = TestKeyPair::load();
@@ -201,13 +199,43 @@ async fn test_jwks_caching_prevents_refetch() {
     let claims = TestCognitoClaims::valid(&config.cognito_issuer(), TEST_CLIENT_ID);
     let token = keypair.sign(&claims);
 
-    // Validate multiple times - JWKS should only be fetched once
+    // Validate multiple times - JWKS should only be fetched once due to caching
     for _ in 0..5 {
         let result = validator.validate(&token).await;
         assert!(result.is_ok());
     }
 
-    // Note: We can't easily verify the exact number of fetches without
-    // wiremock request counting, but the test verifies caching works
-    // by not timing out due to excessive fetches
+    // Guard verifies exactly 1 JWKS fetch on drop - proves caching works
+}
+
+#[tokio::test]
+async fn test_jwks_flood_protection() {
+    use std::sync::Arc;
+
+    // Start bare server and mount JWKS expecting only 1 fetch despite concurrent load
+    let mock_server = JwksMockServer::start_bare().await;
+    let config = create_test_config(&mock_server.url());
+    let _guard = mock_server.expect_jwks_calls(1).await;
+
+    let validator = Arc::new(TokenValidator::new(config.clone()));
+    let keypair = TestKeyPair::load();
+    let claims = TestCognitoClaims::valid(&config.cognito_issuer(), TEST_CLIENT_ID);
+    let token = Arc::new(keypair.sign(&claims));
+
+    // Spawn 50 concurrent validation requests
+    let handles: Vec<_> = (0..50)
+        .map(|_| {
+            let validator = Arc::clone(&validator);
+            let token = Arc::clone(&token);
+            tokio::spawn(async move { validator.validate(&token).await })
+        })
+        .collect();
+
+    // All should succeed
+    for handle in handles {
+        let result = handle.await.expect("task panicked");
+        assert!(result.is_ok(), "validation failed: {:?}", result);
+    }
+
+    // Guard verifies exactly 1 JWKS fetch - proves flood protection works
 }

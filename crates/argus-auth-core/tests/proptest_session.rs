@@ -20,10 +20,10 @@ use proptest::prelude::*;
 /// Generate arbitrary session payloads
 fn arb_session_payload() -> impl Strategy<Value = SessionPayload> {
     (
-        any::<[u8; 16]>(),                        // user_id bytes
-        "[a-z0-9_.+-]+@[a-z0-9.-]+\\.[a-z]{2,4}", // email regex
+        any::<[u8; 16]>(),                           // user_id bytes
+        "[a-z0-9_.+-]+@[a-z0-9.-]+\\.[a-z]{2,4}",    // email regex
         prop::collection::vec("[a-z_]{3,15}", 0..5), // groups
-        1u32..168u32,                             // duration_hours
+        1u32..168u32,                                // duration_hours
     )
         .prop_map(|(id_bytes, email, groups, hours)| {
             let user_id = UserId(uuid::Uuid::from_bytes(id_bytes));
@@ -47,9 +47,8 @@ fn arb_malformed_cookie() -> impl Strategy<Value = String> {
         // Invalid base64 characters
         "[!@#$%^&*()]{10,30}\\.[a-zA-Z0-9_-]{20,40}",
         // Valid base64 but not JSON
-        any::<[u8; 32]>().prop_map(|bytes| {
-            format!("{}.fake_sig", URL_SAFE_NO_PAD.encode(bytes))
-        }),
+        any::<[u8; 32]>()
+            .prop_map(|bytes| { format!("{}.fake_sig", URL_SAFE_NO_PAD.encode(bytes)) }),
         // Truncated signatures
         any::<[u8; 16]>().prop_map(|bytes| {
             let payload = URL_SAFE_NO_PAD.encode(bytes);

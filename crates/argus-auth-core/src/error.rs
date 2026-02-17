@@ -9,7 +9,7 @@ use thiserror::Error;
 /// This enum is marked `#[non_exhaustive]` to allow adding new variants
 /// without breaking semver compatibility. Use a wildcard match arm when
 /// matching on this type.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 #[non_exhaustive]
 pub enum AuthError {
     /// Invalid token (malformed, bad signature, etc.)

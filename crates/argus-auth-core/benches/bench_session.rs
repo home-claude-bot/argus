@@ -35,10 +35,7 @@ fn bench_session_cookie_operations(c: &mut Criterion) {
     let payload = SessionPayload::new(
         user_id,
         "benchmark@example.com",
-        vec![
-            "andrz_professional".to_string(),
-            "andrz_admin".to_string(),
-        ],
+        vec!["andrz_professional".to_string(), "andrz_admin".to_string()],
         24,
     );
 

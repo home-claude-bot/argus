@@ -5,7 +5,7 @@
 use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockGuard, MockServer, ResponseTemplate};
 
 // Pre-generated 2048-bit RSA keypair for testing (DO NOT use in production!)
 // Generated with: openssl genrsa 2048
@@ -227,6 +227,36 @@ impl JwksMockServer {
             .respond_with(ResponseTemplate::new(status_code))
             .mount(&self.server)
             .await;
+    }
+
+    /// Mount a JWKS mock with exact call count expectation
+    /// Returns a guard that panics on drop if expectations aren't met
+    #[allow(dead_code)]
+    pub async fn expect_jwks_calls(&self, expected_calls: u64) -> MockGuard {
+        let jwks_json = serde_json::json!({
+            "keys": [{
+                "kid": TEST_KEY_ID,
+                "kty": "RSA",
+                "alg": "RS256",
+                "use": "sig",
+                "n": TEST_RSA_N,
+                "e": TEST_RSA_E
+            }]
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/.well-known/jwks.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(jwks_json))
+            .expect(expected_calls)
+            .mount_as_scoped(&self.server)
+            .await
+    }
+
+    /// Start a bare mock server without JWKS mounted (for custom setups)
+    #[allow(dead_code)]
+    pub async fn start_bare() -> Self {
+        let server = MockServer::start().await;
+        Self { server }
     }
 }
 

@@ -54,8 +54,8 @@ fn arb_admin_group() -> impl Strategy<Value = String> {
 /// These should NOT grant admin because "admin" is not at the suffix position
 fn arb_fake_admin_group() -> impl Strategy<Value = String> {
     prop_oneof![
-        "admin_[a-z]{3,10}",       // admin at start, not suffix
-        "[a-z]+_admin_[a-z]+",     // admin in middle, not suffix
+        "admin_[a-z]{3,10}",                // admin at start, not suffix
+        "[a-z]+_admin_[a-z]+",              // admin in middle, not suffix
         Just("administrator".to_string()),  // different word
         Just("admin_disabled".to_string()), // admin at start
         Just("admin_revoked".to_string()),  // admin at start
@@ -259,10 +259,7 @@ fn test_tier_priority_order() {
     assert_eq!(extract_tier_from_groups(&groups), Tier::Business);
 
     // Without business - professional should win
-    let groups = vec![
-        "a_explorer".to_string(),
-        "a_professional".to_string(),
-    ];
+    let groups = vec!["a_explorer".to_string(), "a_professional".to_string()];
     assert_eq!(extract_tier_from_groups(&groups), Tier::Professional);
 }
 
