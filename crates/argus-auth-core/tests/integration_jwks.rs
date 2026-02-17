@@ -14,8 +14,8 @@ const TEST_REGION: &str = "us-east-1";
 
 /// Create an AuthConfig pointing to the mock server
 fn create_test_config(mock_url: &str) -> AuthConfig {
-    AuthConfig::new(TEST_POOL_ID, TEST_REGION, TEST_CLIENT_ID, &"a".repeat(32))
-        .with_jwks_url_override(format!("{}/.well-known/jwks.json", mock_url))
+    AuthConfig::new(TEST_POOL_ID, TEST_REGION, TEST_CLIENT_ID, "a".repeat(32))
+        .with_jwks_url_override(format!("{mock_url}/.well-known/jwks.json"))
 }
 
 #[tokio::test]
@@ -34,7 +34,7 @@ async fn test_valid_jwt_validates_successfully() {
     // Validate
     let result = validator.validate(&token).await;
 
-    assert!(result.is_ok(), "Expected valid token, got: {:?}", result);
+    assert!(result.is_ok(), "Expected valid token, got: {result:?}");
     let validated_claims = result.unwrap();
     assert_eq!(validated_claims.sub, claims.sub);
 }
@@ -57,7 +57,7 @@ async fn test_expired_jwt_returns_token_expired() {
     assert!(result.is_err());
     match result.unwrap_err() {
         argus_auth_core::AuthError::TokenExpired => {}
-        other => panic!("Expected TokenExpired, got: {:?}", other),
+        other => panic!("Expected TokenExpired, got: {other:?}"),
     }
 }
 
@@ -79,7 +79,7 @@ async fn test_unknown_kid_returns_invalid_token() {
     assert!(result.is_err());
     match result.unwrap_err() {
         argus_auth_core::AuthError::InvalidToken => {}
-        other => panic!("Expected InvalidToken, got: {:?}", other),
+        other => panic!("Expected InvalidToken, got: {other:?}"),
     }
 }
 
@@ -101,7 +101,7 @@ async fn test_wrong_issuer_returns_invalid_token() {
     assert!(result.is_err());
     match result.unwrap_err() {
         argus_auth_core::AuthError::InvalidToken => {}
-        other => panic!("Expected InvalidToken, got: {:?}", other),
+        other => panic!("Expected InvalidToken, got: {other:?}"),
     }
 }
 
@@ -116,8 +116,7 @@ async fn test_wrong_client_id_returns_invalid_token() {
     // Create claims with wrong client ID
     let claims = TestCognitoClaims::valid(
         &format!(
-            "https://cognito-idp.us-east-1.amazonaws.com/{}",
-            TEST_POOL_ID
+            "https://cognito-idp.us-east-1.amazonaws.com/{TEST_POOL_ID}"
         ),
         "wrong-client-id",
     );
@@ -129,7 +128,7 @@ async fn test_wrong_client_id_returns_invalid_token() {
     assert!(result.is_err());
     match result.unwrap_err() {
         argus_auth_core::AuthError::InvalidToken => {}
-        other => panic!("Expected InvalidToken, got: {:?}", other),
+        other => panic!("Expected InvalidToken, got: {other:?}"),
     }
 }
 
@@ -180,8 +179,7 @@ async fn test_malformed_jwt_returns_invalid_token() {
         let result = validator.validate(token).await;
         assert!(
             result.is_err(),
-            "Expected error for malformed token: {:?}",
-            token
+            "Expected error for malformed token: {token:?}"
         );
     }
 }
@@ -234,7 +232,7 @@ async fn test_jwks_flood_protection() {
     // All should succeed
     for handle in handles {
         let result = handle.await.expect("task panicked");
-        assert!(result.is_ok(), "validation failed: {:?}", result);
+        assert!(result.is_ok(), "validation failed: {result:?}");
     }
 
     // Guard verifies exactly 1 JWKS fetch - proves flood protection works

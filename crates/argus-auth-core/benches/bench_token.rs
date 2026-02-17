@@ -27,7 +27,7 @@ fn bench_hmac_operations(c: &mut Criterion) {
 
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
-            &(data.clone(), signature.clone()),
+            &(data.clone(), signature),
             |b, (data, sig)| {
                 b.iter(|| key.verify(black_box(data), black_box(sig)));
             },

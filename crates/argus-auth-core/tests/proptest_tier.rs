@@ -210,9 +210,7 @@ fn test_tier_requires_exact_suffix() {
         assert_eq!(
             tier,
             Tier::Explorer,
-            "Groups {:?} should not grant tier, got {:?}",
-            groups,
-            tier
+            "Groups {groups:?} should not grant tier, got {tier:?}"
         );
     }
 }
@@ -233,8 +231,7 @@ fn test_admin_requires_exact_suffix() {
         let role = extract_role_from_groups(&groups);
         assert_eq!(
             role, "user",
-            "Groups {:?} should not grant admin, got {:?}",
-            groups, role
+            "Groups {groups:?} should not grant admin, got {role:?}"
         );
     }
 }

@@ -43,7 +43,7 @@ fn arb_malformed_cookie() -> impl Strategy<Value = String> {
         Just("payload.".to_string()),
         Just("..".to_string()),
         Just(".".to_string()),
-        Just("".to_string()),
+        Just(String::new()),
         // Invalid base64 characters
         "[!@#$%^&*()]{10,30}\\.[a-zA-Z0-9_-]{20,40}",
         // Valid base64 but not JSON
@@ -99,13 +99,13 @@ proptest! {
     /// Property: Signed cookies should always roundtrip successfully
     #[test]
     fn prop_signed_cookie_roundtrips(payload in arb_session_payload()) {
-        let key = HmacKey::new(&"a]".repeat(32)).unwrap();
+        let key = HmacKey::new("a]".repeat(32)).unwrap();
 
         // Sign the payload
         let payload_json = serde_json::to_vec(&payload).unwrap();
         let payload_b64 = URL_SAFE_NO_PAD.encode(&payload_json);
         let signature = key.sign(payload_b64.as_bytes());
-        let sig_b64 = URL_SAFE_NO_PAD.encode(&signature);
+        let sig_b64 = URL_SAFE_NO_PAD.encode(signature);
         let cookie = format!("{payload_b64}.{sig_b64}");
 
         // Verify roundtrip - parse the cookie
@@ -145,7 +145,7 @@ proptest! {
         tamper_byte in 0usize..32usize,
         tamper_bit in 0u8..8u8
     ) {
-        let key = HmacKey::new(&"a]".repeat(32)).unwrap();
+        let key = HmacKey::new("a]".repeat(32)).unwrap();
 
         // Create valid signed cookie
         let payload_json = serde_json::to_vec(&payload).unwrap();
@@ -153,7 +153,7 @@ proptest! {
         let signature = key.sign(payload_b64.as_bytes());
 
         // Tamper with one bit
-        let mut tampered_sig = signature.clone();
+        let mut tampered_sig = signature;
         if tamper_byte < tampered_sig.len() {
             tampered_sig[tamper_byte] ^= 1 << tamper_bit;
         }
@@ -173,7 +173,7 @@ proptest! {
         payload in arb_session_payload(),
         tamper_byte in 0usize..100usize
     ) {
-        let key = HmacKey::new(&"a]".repeat(32)).unwrap();
+        let key = HmacKey::new("a]".repeat(32)).unwrap();
 
         // Create valid signed cookie
         let payload_json = serde_json::to_vec(&payload).unwrap();
@@ -285,8 +285,8 @@ fn test_hmac_key_31_bytes_rejected() {
 
 #[test]
 fn test_different_keys_produce_different_signatures() {
-    let key1 = HmacKey::new(&"a".repeat(32)).unwrap();
-    let key2 = HmacKey::new(&"b".repeat(32)).unwrap();
+    let key1 = HmacKey::new("a".repeat(32)).unwrap();
+    let key2 = HmacKey::new("b".repeat(32)).unwrap();
     let data = b"test data";
 
     let sig1 = key1.sign(data);
