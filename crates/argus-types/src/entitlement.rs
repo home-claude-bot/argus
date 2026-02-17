@@ -145,4 +145,8 @@ pub struct EntitlementCheck {
     pub reason: Option<String>,
     /// Remaining usage (if limited)
     pub remaining: Option<u64>,
+    /// User's current tier
+    pub tier: Tier,
+    /// Minimum tier required for this feature
+    pub required_tier: Tier,
 }

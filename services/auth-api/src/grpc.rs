@@ -1,0 +1,473 @@
+//! gRPC AuthService implementation
+
+use argus_auth_core::ClaimsSource;
+use argus_proto::auth_service::auth_service_server::AuthService;
+use argus_proto::{
+    BatchCheckEntitlementsRequest, BatchCheckEntitlementsResponse, BatchValidateTokensRequest,
+    BatchValidateTokensResponse, CheckEntitlementRequest, CheckEntitlementResponse,
+    CreateSessionRequest, CreateSessionResponse, EntitlementResult, Error as ProtoError,
+    GetRateLimitRequest, GetRateLimitResponse, GetUserTierRequest, GetUserTierResponse,
+    HealthCheckRequest, HealthCheckResponse, IntrospectTokenRequest, IntrospectTokenResponse,
+    ListSessionsRequest, ListSessionsResponse, RateLimit as ProtoRateLimit, RateLimitStatus,
+    RefreshTokenRequest, RefreshTokenResponse, RevokeAllSessionsRequest, RevokeAllSessionsResponse,
+    RevokeSessionRequest, RevokeSessionResponse, Role, SessionId as ProtoSessionId,
+    Tier as ProtoTier, TokenClaims, TokenSource, UserId as ProtoUserId, ValidateTokenRequest,
+    ValidateTokenResponse,
+};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tonic::{Request, Response, Status};
+
+use crate::state::AuthServiceImpl;
+
+/// gRPC service implementation
+pub struct GrpcAuthService {
+    auth: Arc<AuthServiceImpl>,
+}
+
+impl GrpcAuthService {
+    pub fn new(auth: Arc<AuthServiceImpl>) -> Self {
+        Self { auth }
+    }
+}
+
+// Helper functions for type conversions
+fn tier_to_proto(tier: argus_types::Tier) -> i32 {
+    match tier {
+        argus_types::Tier::Explorer => ProtoTier::Explorer as i32,
+        argus_types::Tier::Professional => ProtoTier::Professional as i32,
+        argus_types::Tier::Business => ProtoTier::Business as i32,
+        argus_types::Tier::Enterprise => ProtoTier::Enterprise as i32,
+    }
+}
+
+fn source_to_proto(source: ClaimsSource) -> i32 {
+    match source {
+        ClaimsSource::Jwt => TokenSource::Jwt as i32,
+        ClaimsSource::Session => TokenSource::Session as i32,
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn proto_to_user_id(proto_id: Option<ProtoUserId>) -> Result<argus_types::UserId, Status> {
+    proto_id
+        .and_then(|id| argus_types::UserId::parse(&id.value).ok())
+        .ok_or_else(|| Status::invalid_argument("Invalid user_id"))
+}
+
+#[allow(clippy::result_large_err)]
+fn proto_to_session_id(proto_id: Option<ProtoSessionId>) -> Result<argus_types::SessionId, Status> {
+    proto_id
+        .and_then(|id| uuid::Uuid::parse_str(&id.value).ok())
+        .map(argus_types::SessionId::from)
+        .ok_or_else(|| Status::invalid_argument("Invalid session_id"))
+}
+
+#[tonic::async_trait]
+impl AuthService for GrpcAuthService {
+    async fn validate_token(
+        &self,
+        request: Request<ValidateTokenRequest>,
+    ) -> Result<Response<ValidateTokenResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.auth.validate_token(&req.token).await {
+            Ok(claims) => {
+                let now = chrono::Utc::now();
+                Ok(Response::new(ValidateTokenResponse {
+                    valid: true,
+                    claims: Some(TokenClaims {
+                        user_id: Some(ProtoUserId {
+                            value: claims.user_id.to_string(),
+                        }),
+                        email: claims.email.unwrap_or_default(),
+                        email_verified: true,
+                        tier: tier_to_proto(claims.tier),
+                        role: Role::User as i32,
+                        groups: claims.groups,
+                        scopes: vec![],
+                        issued_at: Some(prost_types::Timestamp {
+                            seconds: now.timestamp(),
+                            nanos: 0,
+                        }),
+                        expires_at: Some(prost_types::Timestamp {
+                            seconds: now.timestamp() + 3600,
+                            nanos: 0,
+                        }),
+                        source: source_to_proto(claims.source),
+                    }),
+                    error: None,
+                }))
+            }
+            Err(e) => Ok(Response::new(ValidateTokenResponse {
+                valid: false,
+                claims: None,
+                error: Some(ProtoError {
+                    code: "INVALID_TOKEN".to_string(),
+                    message: e.to_string(),
+                    details: HashMap::new(),
+                }),
+            })),
+        }
+    }
+
+    async fn batch_validate_tokens(
+        &self,
+        request: Request<BatchValidateTokensRequest>,
+    ) -> Result<Response<BatchValidateTokensResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.tokens.len() > 100 {
+            return Err(Status::invalid_argument("Maximum 100 tokens per batch"));
+        }
+
+        let mut results = Vec::with_capacity(req.tokens.len());
+        let mut valid_count = 0u32;
+        let mut invalid_count = 0u32;
+
+        for token in req.tokens {
+            match self.auth.validate_token(&token).await {
+                Ok(claims) => {
+                    valid_count += 1;
+                    let now = chrono::Utc::now();
+                    results.push(ValidateTokenResponse {
+                        valid: true,
+                        claims: Some(TokenClaims {
+                            user_id: Some(ProtoUserId {
+                                value: claims.user_id.to_string(),
+                            }),
+                            email: claims.email.unwrap_or_default(),
+                            email_verified: true,
+                            tier: tier_to_proto(claims.tier),
+                            role: Role::User as i32,
+                            groups: claims.groups,
+                            scopes: vec![],
+                            issued_at: Some(prost_types::Timestamp {
+                                seconds: now.timestamp(),
+                                nanos: 0,
+                            }),
+                            expires_at: Some(prost_types::Timestamp {
+                                seconds: now.timestamp() + 3600,
+                                nanos: 0,
+                            }),
+                            source: source_to_proto(claims.source),
+                        }),
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    invalid_count += 1;
+                    results.push(ValidateTokenResponse {
+                        valid: false,
+                        claims: None,
+                        error: Some(ProtoError {
+                            code: "INVALID_TOKEN".to_string(),
+                            message: e.to_string(),
+                            details: HashMap::new(),
+                        }),
+                    });
+                }
+            }
+        }
+
+        Ok(Response::new(BatchValidateTokensResponse {
+            results,
+            valid_count,
+            invalid_count,
+        }))
+    }
+
+    async fn create_session(
+        &self,
+        request: Request<CreateSessionRequest>,
+    ) -> Result<Response<CreateSessionResponse>, Status> {
+        let req = request.into_inner();
+
+        // Validate the access token to get claims
+        let claims = self
+            .auth
+            .validate_jwt(&req.access_token)
+            .await
+            .map_err(|e| Status::unauthenticated(e.to_string()))?;
+
+        // Create Cognito claims from validated token
+        let cognito_claims = argus_auth_core::CognitoClaims {
+            sub: claims.user_id.to_string(),
+            email: claims.email,
+            email_verified: Some(true),
+            cognito_groups: claims.groups,
+            iat: chrono::Utc::now().timestamp(),
+            exp: chrono::Utc::now().timestamp() + 3600,
+            iss: String::new(),
+            aud: None,
+            client_id: None,
+            token_use: Some("access".to_string()),
+        };
+
+        let ip_address = if req.ip_address.is_empty() {
+            None
+        } else {
+            Some(req.ip_address)
+        };
+        let user_agent = if req.user_agent.is_empty() {
+            None
+        } else {
+            Some(req.user_agent)
+        };
+
+        let (session_id, session_cookie) = self
+            .auth
+            .create_session(&cognito_claims, ip_address, user_agent)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+
+        Ok(Response::new(CreateSessionResponse {
+            session_id: Some(ProtoSessionId {
+                value: session_id.to_string(),
+            }),
+            session_cookie,
+            expires_at: Some(prost_types::Timestamp {
+                seconds: expires_at.timestamp(),
+                nanos: 0,
+            }),
+        }))
+    }
+
+    async fn refresh_token(
+        &self,
+        _request: Request<RefreshTokenRequest>,
+    ) -> Result<Response<RefreshTokenResponse>, Status> {
+        // Refresh tokens should be exchanged directly with Cognito
+        Err(Status::unimplemented(
+            "Refresh tokens should be exchanged directly with Cognito",
+        ))
+    }
+
+    async fn revoke_session(
+        &self,
+        request: Request<RevokeSessionRequest>,
+    ) -> Result<Response<RevokeSessionResponse>, Status> {
+        let req = request.into_inner();
+        let session_id = proto_to_session_id(req.session_id)?;
+
+        self.auth
+            .revoke_session(session_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(RevokeSessionResponse { success: true }))
+    }
+
+    async fn revoke_all_sessions(
+        &self,
+        request: Request<RevokeAllSessionsRequest>,
+    ) -> Result<Response<RevokeAllSessionsResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = proto_to_user_id(req.user_id)?;
+
+        let count = self
+            .auth
+            .revoke_all_sessions(&user_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(RevokeAllSessionsResponse {
+            revoked_count: count,
+        }))
+    }
+
+    async fn list_sessions(
+        &self,
+        _request: Request<ListSessionsRequest>,
+    ) -> Result<Response<ListSessionsResponse>, Status> {
+        // TODO: Implement session listing
+        Ok(Response::new(ListSessionsResponse {
+            sessions: vec![],
+            pagination: None,
+        }))
+    }
+
+    async fn check_entitlement(
+        &self,
+        request: Request<CheckEntitlementRequest>,
+    ) -> Result<Response<CheckEntitlementResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = proto_to_user_id(req.user_id)?;
+
+        let check = self
+            .auth
+            .check_entitlement(&user_id, &req.feature)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(CheckEntitlementResponse {
+            allowed: check.allowed,
+            reason: check.reason.unwrap_or_default(),
+            remaining: check.remaining,
+            tier: tier_to_proto(check.tier),
+            required_tier: tier_to_proto(check.required_tier),
+        }))
+    }
+
+    async fn batch_check_entitlements(
+        &self,
+        request: Request<BatchCheckEntitlementsRequest>,
+    ) -> Result<Response<BatchCheckEntitlementsResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.features.len() > 50 {
+            return Err(Status::invalid_argument("Maximum 50 features per batch"));
+        }
+
+        let user_id = proto_to_user_id(req.user_id)?;
+
+        let mut results = HashMap::new();
+        let mut user_tier = ProtoTier::Explorer as i32;
+
+        for feature in req.features {
+            match self.auth.check_entitlement(&user_id, &feature).await {
+                Ok(check) => {
+                    user_tier = tier_to_proto(check.tier);
+                    results.insert(
+                        feature,
+                        EntitlementResult {
+                            allowed: check.allowed,
+                            reason: check.reason.unwrap_or_default(),
+                            remaining: check.remaining,
+                        },
+                    );
+                }
+                Err(e) => {
+                    results.insert(
+                        feature,
+                        EntitlementResult {
+                            allowed: false,
+                            reason: e.to_string(),
+                            remaining: None,
+                        },
+                    );
+                }
+            }
+        }
+
+        Ok(Response::new(BatchCheckEntitlementsResponse {
+            results,
+            tier: user_tier,
+        }))
+    }
+
+    async fn get_user_tier(
+        &self,
+        request: Request<GetUserTierRequest>,
+    ) -> Result<Response<GetUserTierResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = proto_to_user_id(req.user_id)?;
+
+        let tier = self
+            .auth
+            .get_user_tier(&user_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let rate_limit = self
+            .auth
+            .get_rate_limit(&user_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(GetUserTierResponse {
+            tier: tier_to_proto(tier),
+            features: tier.features().iter().map(ToString::to_string).collect(),
+            rate_limit: Some(ProtoRateLimit {
+                requests: rate_limit.requests,
+                window_seconds: rate_limit.window_seconds,
+            }),
+        }))
+    }
+
+    async fn get_rate_limit(
+        &self,
+        request: Request<GetRateLimitRequest>,
+    ) -> Result<Response<GetRateLimitResponse>, Status> {
+        let req = request.into_inner();
+        let user_id = proto_to_user_id(req.user_id)?;
+
+        let rate_limit = self
+            .auth
+            .get_rate_limit(&user_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(GetRateLimitResponse {
+            rate_limit: Some(ProtoRateLimit {
+                requests: rate_limit.requests,
+                window_seconds: rate_limit.window_seconds,
+            }),
+            status: Some(RateLimitStatus {
+                limit: rate_limit.requests,
+                remaining: rate_limit.requests, // Full quota (no usage tracked here)
+                reset_seconds: rate_limit.window_seconds,
+            }),
+        }))
+    }
+
+    async fn introspect_token(
+        &self,
+        request: Request<IntrospectTokenRequest>,
+    ) -> Result<Response<IntrospectTokenResponse>, Status> {
+        let req = request.into_inner();
+
+        match self.auth.validate_token(&req.token).await {
+            Ok(claims) => {
+                let now = chrono::Utc::now();
+                let token_type = match claims.source {
+                    ClaimsSource::Jwt => "access_token",
+                    ClaimsSource::Session => "session",
+                };
+
+                Ok(Response::new(IntrospectTokenResponse {
+                    active: true,
+                    claims: Some(TokenClaims {
+                        user_id: Some(ProtoUserId {
+                            value: claims.user_id.to_string(),
+                        }),
+                        email: claims.email.unwrap_or_default(),
+                        email_verified: true,
+                        tier: tier_to_proto(claims.tier),
+                        role: Role::User as i32,
+                        groups: claims.groups,
+                        scopes: vec![],
+                        issued_at: Some(prost_types::Timestamp {
+                            seconds: now.timestamp(),
+                            nanos: 0,
+                        }),
+                        expires_at: Some(prost_types::Timestamp {
+                            seconds: now.timestamp() + 3600,
+                            nanos: 0,
+                        }),
+                        source: source_to_proto(claims.source),
+                    }),
+                    token_type: token_type.to_string(),
+                    client_id: String::new(),
+                }))
+            }
+            Err(_) => Ok(Response::new(IntrospectTokenResponse {
+                active: false,
+                claims: None,
+                token_type: String::new(),
+                client_id: String::new(),
+            })),
+        }
+    }
+
+    async fn health_check(
+        &self,
+        _request: Request<HealthCheckRequest>,
+    ) -> Result<Response<HealthCheckResponse>, Status> {
+        Ok(Response::new(HealthCheckResponse {
+            status: argus_proto::health_check_response::ServingStatus::Serving as i32,
+        }))
+    }
+}
