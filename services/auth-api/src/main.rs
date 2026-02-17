@@ -40,9 +40,12 @@ use axum::Router;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use tokio::signal;
 use tonic::transport::Server as TonicServer;
+use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::TraceLayer;
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -126,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn build_router(state: AppState, metrics_handle: Option<PrometheusHandle>) -> Router {
+    let request_timeout = state.request_timeout();
+
     // API v1 routes
     let api_v1 = Router::new()
         // Auth routes
@@ -139,32 +144,45 @@ fn build_router(state: AppState, metrics_handle: Option<PrometheusHandle>) -> Ro
             get(handlers::get_user_tier).post(handlers::update_user_tier),
         );
 
-    // Health routes
+    // Health routes (no timeout - must always respond quickly)
     let health_routes = Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready));
 
-    // Metrics route
+    // Metrics route (no timeout)
     let metrics_route = if let Some(handle) = metrics_handle {
         Router::new().route("/metrics", get(move || async move { handle.render() }))
     } else {
         Router::new()
     };
 
-    // Combine all routes
-    Router::new()
-        .nest("/api/v1", api_v1)
-        .merge(health_routes)
-        .merge(metrics_route)
+    // Build middleware stack (order matters - outermost first)
+    let middleware = ServiceBuilder::new()
+        // Request ID propagation (outermost)
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+        .layer(PropagateRequestIdLayer::x_request_id())
+        // Tracing with request details
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
+        // CORS
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
-        .layer(TraceLayer::new_for_http())
-        .layer(PropagateRequestIdLayer::x_request_id())
-        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+        // Request timeout (innermost - closest to handler)
+        .layer(TimeoutLayer::new(request_timeout));
+
+    // Combine all routes
+    Router::new()
+        .nest("/api/v1", api_v1)
+        .layer(middleware)
+        .merge(health_routes) // Health routes without timeout
+        .merge(metrics_route) // Metrics route without timeout
         .with_state(state)
 }
 
@@ -200,32 +218,56 @@ async fn run_grpc_server(state: AppState, addr: SocketAddr) -> anyhow::Result<()
 }
 
 fn setup_metrics() -> anyhow::Result<PrometheusHandle> {
+    // Latency buckets optimized for auth operations
+    // Most auth ops should complete in <50ms, SLO at <100ms p99
+    let auth_latency_buckets = &[
+        0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
+    ];
+
     let builder = PrometheusBuilder::new()
         .set_buckets_for_metric(
             Matcher::Full("http_request_duration_seconds".to_string()),
-            &[
-                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-            ],
+            auth_latency_buckets,
         )?
         .set_buckets_for_metric(
             Matcher::Full("grpc_request_duration_seconds".to_string()),
-            &[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+            auth_latency_buckets,
+        )?
+        .set_buckets_for_metric(
+            Matcher::Full("auth_operation_duration_seconds".to_string()),
+            auth_latency_buckets,
         )?;
 
     let handle = builder.install_recorder()?;
 
-    // Register some base metrics
+    // Register metrics with descriptions
     metrics::describe_counter!(
         "auth_token_validations_total",
-        "Total number of token validation attempts"
+        "Total token validation attempts by result (valid/invalid/batch)"
     );
     metrics::describe_counter!(
         "auth_sessions_created_total",
-        "Total number of sessions created"
+        "Total sessions created"
+    );
+    metrics::describe_counter!(
+        "auth_sessions_revoked_total",
+        "Total sessions revoked"
+    );
+    metrics::describe_counter!(
+        "auth_entitlement_checks_total",
+        "Total entitlement checks by result"
     );
     metrics::describe_histogram!(
         "http_request_duration_seconds",
-        "HTTP request duration in seconds"
+        "HTTP request latency in seconds"
+    );
+    metrics::describe_histogram!(
+        "grpc_request_duration_seconds",
+        "gRPC request latency in seconds by method"
+    );
+    metrics::describe_histogram!(
+        "auth_operation_duration_seconds",
+        "Auth operation latency in seconds by operation type"
     );
 
     Ok(handle)

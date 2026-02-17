@@ -4,6 +4,7 @@ use argus_db::UserRepository;
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -54,6 +55,8 @@ pub async fn get_user_tier(
     Path(user_id): Path<Uuid>,
     auth_user: AuthUser,
 ) -> ApiResult<Json<TierResponse>> {
+    let start = Instant::now();
+
     // Users can only view their own tier (unless admin)
     let target_user_id = argus_types::UserId::from(user_id);
 
@@ -63,8 +66,17 @@ pub async fn get_user_tier(
         ));
     }
 
-    let tier = state.auth.get_user_tier(&target_user_id).await?;
-    let rate_limit = state.auth.get_rate_limit(&target_user_id).await?;
+    // Fetch tier and rate limit in parallel
+    let (tier_result, rate_limit_result) = tokio::join!(
+        state.auth.get_user_tier(&target_user_id),
+        state.auth.get_rate_limit(&target_user_id)
+    );
+
+    let tier = tier_result?;
+    let rate_limit = rate_limit_result?;
+
+    metrics::histogram!("auth_operation_duration_seconds", "operation" => "get_tier")
+        .record(start.elapsed().as_secs_f64());
 
     Ok(Json(TierResponse {
         user_id: user_id.to_string(),
@@ -86,6 +98,8 @@ pub async fn update_user_tier(
     auth_user: AuthUser,
     Json(req): Json<UpdateTierRequest>,
 ) -> ApiResult<Json<UpdateTierResponse>> {
+    let start = Instant::now();
+
     // Admin only
     if !auth_user.is_admin() {
         return Err(ApiError::Forbidden("Admin access required".to_string()));
@@ -111,6 +125,10 @@ pub async fn update_user_tier(
 
     // Invalidate caches
     state.auth.invalidate_user_cache(&target_user_id).await;
+
+    metrics::counter!("auth_tier_updates_total", "from" => previous_tier.to_string(), "to" => new_tier.to_string()).increment(1);
+    metrics::histogram!("auth_operation_duration_seconds", "operation" => "update_tier")
+        .record(start.elapsed().as_secs_f64());
 
     tracing::info!(
         user_id = %user_id,

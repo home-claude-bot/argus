@@ -6,6 +6,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::time::Instant;
 
 use crate::error::{ApiError, ApiResult};
 use crate::extractors::AuthUser;
@@ -76,6 +77,8 @@ pub async fn login(
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    let start = Instant::now();
+
     // Get client info for audit
     let ip_address = Some(addr.ip().to_string());
     let user_agent = headers
@@ -85,6 +88,7 @@ pub async fn login(
 
     // Validate the access token first
     let claims = state.auth.validate_jwt(&req.access_token).await?;
+    let now = chrono::Utc::now();
 
     // Get Cognito claims from the token for session creation
     let cognito_claims = argus_auth_core::CognitoClaims {
@@ -92,8 +96,8 @@ pub async fn login(
         email: claims.email.clone(),
         email_verified: Some(true),
         cognito_groups: claims.groups.clone(),
-        iat: chrono::Utc::now().timestamp(),
-        exp: chrono::Utc::now().timestamp() + 3600,
+        iat: now.timestamp(),
+        exp: now.timestamp() + 3600,
         iss: String::new(),
         aud: None,
         client_id: None,
@@ -106,7 +110,12 @@ pub async fn login(
         .create_session(&cognito_claims, ip_address, user_agent)
         .await?;
 
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+    let expires_at = now + chrono::Duration::hours(24);
+
+    // Record metrics
+    metrics::counter!("auth_sessions_created_total").increment(1);
+    metrics::histogram!("auth_operation_duration_seconds", "operation" => "login")
+        .record(start.elapsed().as_secs_f64());
 
     // Build response with Set-Cookie header
     let response = LoginResponse {
@@ -122,8 +131,7 @@ pub async fn login(
 
     // Create cookie header
     let cookie = format!(
-        "argus_session={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={}",
-        session_cookie,
+        "argus_session={session_cookie}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={}",
         24 * 3600
     );
 
@@ -141,10 +149,16 @@ pub async fn logout(
     State(state): State<AppState>,
     auth_user: AuthUser,
 ) -> ApiResult<Json<LogoutResponse>> {
+    let start = Instant::now();
+
     // Get session ID from the auth context
     if let Some(session_id) = auth_user.session_id {
         state.auth.revoke_session(session_id).await?;
+        metrics::counter!("auth_sessions_revoked_total").increment(1);
     }
+
+    metrics::histogram!("auth_operation_duration_seconds", "operation" => "logout")
+        .record(start.elapsed().as_secs_f64());
 
     Ok(Json(LogoutResponse { success: true }))
 }

@@ -1,4 +1,9 @@
 //! gRPC AuthService implementation
+//!
+//! High-performance gRPC service with:
+//! - Parallel batch operations using futures::join_all
+//! - Request-level tracing with timing spans
+//! - Prometheus metrics for all operations
 
 use argus_auth_core::ClaimsSource;
 use argus_proto::auth_service::auth_service_server::AuthService;
@@ -14,8 +19,10 @@ use argus_proto::{
     Tier as ProtoTier, TokenClaims, TokenSource, UserId as ProtoUserId, ValidateTokenRequest,
     ValidateTokenResponse,
 };
+use futures::future::join_all;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tonic::{Request, Response, Status};
 
 use crate::state::AuthServiceImpl;
@@ -69,12 +76,14 @@ impl AuthService for GrpcAuthService {
         &self,
         request: Request<ValidateTokenRequest>,
     ) -> Result<Response<ValidateTokenResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
 
-        match self.auth.validate_token(&req.token).await {
+        let response = match self.auth.validate_token(&req.token).await {
             Ok(claims) => {
+                metrics::counter!("auth_token_validations_total", "result" => "valid").increment(1);
                 let now = chrono::Utc::now();
-                Ok(Response::new(ValidateTokenResponse {
+                ValidateTokenResponse {
                     valid: true,
                     claims: Some(TokenClaims {
                         user_id: Some(ProtoUserId {
@@ -97,39 +106,63 @@ impl AuthService for GrpcAuthService {
                         source: source_to_proto(claims.source),
                     }),
                     error: None,
-                }))
+                }
             }
-            Err(e) => Ok(Response::new(ValidateTokenResponse {
-                valid: false,
-                claims: None,
-                error: Some(ProtoError {
-                    code: "INVALID_TOKEN".to_string(),
-                    message: e.to_string(),
-                    details: HashMap::new(),
-                }),
-            })),
-        }
+            Err(e) => {
+                metrics::counter!("auth_token_validations_total", "result" => "invalid").increment(1);
+                ValidateTokenResponse {
+                    valid: false,
+                    claims: None,
+                    error: Some(ProtoError {
+                        code: "INVALID_TOKEN".to_string(),
+                        message: e.to_string(),
+                        details: HashMap::new(),
+                    }),
+                }
+            }
+        };
+
+        metrics::histogram!("grpc_request_duration_seconds", "method" => "validate_token")
+            .record(start.elapsed().as_secs_f64());
+
+        Ok(Response::new(response))
     }
 
     async fn batch_validate_tokens(
         &self,
         request: Request<BatchValidateTokensRequest>,
     ) -> Result<Response<BatchValidateTokensResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
+        let batch_size = req.tokens.len();
 
-        if req.tokens.len() > 100 {
+        if batch_size > 100 {
             return Err(Status::invalid_argument("Maximum 100 tokens per batch"));
         }
 
-        let mut results = Vec::with_capacity(req.tokens.len());
+        // Execute all validations in parallel for maximum throughput
+        let auth = &self.auth;
+        let futures: Vec<_> = req
+            .tokens
+            .into_iter()
+            .map(|token| async move {
+                let result = auth.validate_token(&token).await;
+                (token, result)
+            })
+            .collect();
+
+        let validation_results = join_all(futures).await;
+
+        // Process results - single pass, no re-allocation
+        let mut results = Vec::with_capacity(batch_size);
         let mut valid_count = 0u32;
         let mut invalid_count = 0u32;
+        let now = chrono::Utc::now();
 
-        for token in req.tokens {
-            match self.auth.validate_token(&token).await {
+        for (_token, result) in validation_results {
+            match result {
                 Ok(claims) => {
                     valid_count += 1;
-                    let now = chrono::Utc::now();
                     results.push(ValidateTokenResponse {
                         valid: true,
                         claims: Some(TokenClaims {
@@ -170,6 +203,19 @@ impl AuthService for GrpcAuthService {
             }
         }
 
+        let elapsed = start.elapsed();
+        metrics::histogram!("grpc_request_duration_seconds", "method" => "batch_validate_tokens")
+            .record(elapsed.as_secs_f64());
+        metrics::counter!("auth_token_validations_total", "result" => "batch")
+            .increment(batch_size as u64);
+        tracing::debug!(
+            batch_size,
+            valid_count,
+            invalid_count,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "batch_validate_tokens completed"
+        );
+
         Ok(Response::new(BatchValidateTokensResponse {
             results,
             valid_count,
@@ -181,6 +227,7 @@ impl AuthService for GrpcAuthService {
         &self,
         request: Request<CreateSessionRequest>,
     ) -> Result<Response<CreateSessionResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
 
         // Validate the access token to get claims
@@ -190,30 +237,25 @@ impl AuthService for GrpcAuthService {
             .await
             .map_err(|e| Status::unauthenticated(e.to_string()))?;
 
+        let now = chrono::Utc::now();
+
         // Create Cognito claims from validated token
         let cognito_claims = argus_auth_core::CognitoClaims {
             sub: claims.user_id.to_string(),
             email: claims.email,
             email_verified: Some(true),
             cognito_groups: claims.groups,
-            iat: chrono::Utc::now().timestamp(),
-            exp: chrono::Utc::now().timestamp() + 3600,
+            iat: now.timestamp(),
+            exp: now.timestamp() + 3600,
             iss: String::new(),
             aud: None,
             client_id: None,
             token_use: Some("access".to_string()),
         };
 
-        let ip_address = if req.ip_address.is_empty() {
-            None
-        } else {
-            Some(req.ip_address)
-        };
-        let user_agent = if req.user_agent.is_empty() {
-            None
-        } else {
-            Some(req.user_agent)
-        };
+        // Use filter for cleaner empty string handling
+        let ip_address = (!req.ip_address.is_empty()).then_some(req.ip_address);
+        let user_agent = (!req.user_agent.is_empty()).then_some(req.user_agent);
 
         let (session_id, session_cookie) = self
             .auth
@@ -221,7 +263,11 @@ impl AuthService for GrpcAuthService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+        let expires_at = now + chrono::Duration::hours(24);
+
+        metrics::counter!("auth_sessions_created_total").increment(1);
+        metrics::histogram!("grpc_request_duration_seconds", "method" => "create_session")
+            .record(start.elapsed().as_secs_f64());
 
         Ok(Response::new(CreateSessionResponse {
             session_id: Some(ProtoSessionId {
@@ -315,19 +361,38 @@ impl AuthService for GrpcAuthService {
         &self,
         request: Request<BatchCheckEntitlementsRequest>,
     ) -> Result<Response<BatchCheckEntitlementsResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
+        let batch_size = req.features.len();
 
-        if req.features.len() > 50 {
+        if batch_size > 50 {
             return Err(Status::invalid_argument("Maximum 50 features per batch"));
         }
 
         let user_id = proto_to_user_id(req.user_id)?;
 
-        let mut results = HashMap::new();
+        // Execute all entitlement checks in parallel
+        let auth = &self.auth;
+        let futures: Vec<_> = req
+            .features
+            .into_iter()
+            .map(|feature| {
+                let uid = user_id;
+                async move {
+                    let result = auth.check_entitlement(&uid, &feature).await;
+                    (feature, result)
+                }
+            })
+            .collect();
+
+        let check_results = join_all(futures).await;
+
+        // Process results - use with_capacity for HashMap
+        let mut results = HashMap::with_capacity(batch_size);
         let mut user_tier = ProtoTier::Explorer as i32;
 
-        for feature in req.features {
-            match self.auth.check_entitlement(&user_id, &feature).await {
+        for (feature, result) in check_results {
+            match result {
                 Ok(check) => {
                     user_tier = tier_to_proto(check.tier);
                     results.insert(
@@ -351,6 +416,16 @@ impl AuthService for GrpcAuthService {
                 }
             }
         }
+
+        let elapsed = start.elapsed();
+        metrics::histogram!("grpc_request_duration_seconds", "method" => "batch_check_entitlements")
+            .record(elapsed.as_secs_f64());
+        tracing::debug!(
+            batch_size,
+            user_id = %user_id,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "batch_check_entitlements completed"
+        );
 
         Ok(Response::new(BatchCheckEntitlementsResponse {
             results,

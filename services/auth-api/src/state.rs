@@ -1,5 +1,6 @@
 //! Application state
 
+use std::ops::Deref;
 use std::sync::Arc;
 
 use argus_auth_core::AuthService;
@@ -11,6 +12,18 @@ use crate::config::Config;
 /// Type alias for the auth service with concrete repository types
 pub type AuthServiceImpl = AuthService<PgUserRepository, PgSessionRepository>;
 
+/// Shared database pool wrapper for health checks
+#[derive(Clone)]
+pub struct SharedPool(Arc<DbPool>);
+
+impl Deref for SharedPool {
+    type Target = DbPool;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -18,11 +31,9 @@ pub struct AppState {
     pub auth: Arc<AuthServiceImpl>,
     /// Database repositories
     pub repos: Repositories,
-    /// Database connection pool
-    #[allow(dead_code)]
-    pub pool: DbPool,
+    /// Database connection pool (shared reference for health checks)
+    pub pool: SharedPool,
     /// Application configuration
-    #[allow(dead_code)]
     pub config: Arc<Config>,
 }
 
@@ -32,8 +43,13 @@ impl AppState {
         Self {
             auth: Arc::new(auth),
             repos,
-            pool,
+            pool: SharedPool(Arc::new(pool)),
             config: Arc::new(config),
         }
+    }
+
+    /// Get request timeout from config
+    pub fn request_timeout(&self) -> std::time::Duration {
+        self.config.request_timeout
     }
 }
