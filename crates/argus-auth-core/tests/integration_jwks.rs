@@ -115,9 +115,7 @@ async fn test_wrong_client_id_returns_invalid_token() {
 
     // Create claims with wrong client ID
     let claims = TestCognitoClaims::valid(
-        &format!(
-            "https://cognito-idp.us-east-1.amazonaws.com/{TEST_POOL_ID}"
-        ),
+        &format!("https://cognito-idp.us-east-1.amazonaws.com/{TEST_POOL_ID}"),
         "wrong-client-id",
     );
     let token = keypair.sign(&claims);
