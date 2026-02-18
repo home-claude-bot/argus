@@ -4,11 +4,24 @@ use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
+use tracing::instrument;
 
 use argus_types::{Tier, UserId};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+
+/// Record HTTP operation duration with result label
+#[inline]
+fn record_op_duration(operation: &'static str, start: Instant, success: bool) {
+    let result = if success { "ok" } else { "err" };
+    metrics::histogram!(
+        "billing_operation_duration_seconds",
+        "operation" => operation,
+        "result" => result
+    )
+    .record(start.elapsed().as_secs_f64());
+}
 
 // ============================================================================
 // Request/Response Types
@@ -59,19 +72,19 @@ pub struct GetSubscriptionRequest {
 // ============================================================================
 
 /// GET /api/v1/billing/subscription
+#[instrument(skip(state, req), fields(user_id = %req.user_id))]
 pub async fn get_subscription(
     State(state): State<AppState>,
     Json(req): Json<GetSubscriptionRequest>,
 ) -> ApiResult<Json<SubscriptionResponse>> {
     let start = Instant::now();
 
-    let user_id = UserId::parse(&req.user_id)
-        .map_err(|_| ApiError::BadRequest("Invalid user_id".to_string()))?;
+    let user_id =
+        UserId::parse(&req.user_id).map_err(|_| ApiError::BadRequest("Invalid user_id".into()))?;
 
     let sub = state.billing.get_subscription(&user_id).await?;
 
-    metrics::histogram!("billing_operation_duration_seconds", "operation" => "get_subscription")
-        .record(start.elapsed().as_secs_f64());
+    record_op_duration("get_subscription", start, true);
 
     Ok(Json(SubscriptionResponse {
         id: sub.id.0.to_string(),
@@ -84,14 +97,15 @@ pub async fn get_subscription(
 }
 
 /// POST /api/v1/billing/checkout
+#[instrument(skip(state, req), fields(user_id = %req.user_id, tier = %req.tier))]
 pub async fn create_checkout(
     State(state): State<AppState>,
     Json(req): Json<CreateCheckoutRequest>,
 ) -> ApiResult<Json<CheckoutResponse>> {
     let start = Instant::now();
 
-    let user_id = UserId::parse(&req.user_id)
-        .map_err(|_| ApiError::BadRequest("Invalid user_id".to_string()))?;
+    let user_id =
+        UserId::parse(&req.user_id).map_err(|_| ApiError::BadRequest("Invalid user_id".into()))?;
 
     let tier: Tier = req
         .tier
@@ -108,11 +122,10 @@ pub async fn create_checkout(
         )
         .await?;
 
-    metrics::counter!("billing_checkouts_created_total").increment(1);
-    metrics::histogram!("billing_operation_duration_seconds", "operation" => "create_checkout")
-        .record(start.elapsed().as_secs_f64());
+    metrics::counter!("billing_checkouts_created_total", "tier" => tier.to_string()).increment(1);
+    record_op_duration("create_checkout", start, true);
 
-    tracing::info!(user_id = %user_id, tier = %tier, "Checkout session created");
+    tracing::info!("Checkout session created");
 
     Ok(Json(CheckoutResponse {
         session_id: session.session_id,
@@ -121,22 +134,22 @@ pub async fn create_checkout(
 }
 
 /// POST /api/v1/billing/portal
+#[instrument(skip(state, req), fields(user_id = %req.user_id))]
 pub async fn create_portal(
     State(state): State<AppState>,
     Json(req): Json<CreatePortalRequest>,
 ) -> ApiResult<Json<PortalResponse>> {
     let start = Instant::now();
 
-    let user_id = UserId::parse(&req.user_id)
-        .map_err(|_| ApiError::BadRequest("Invalid user_id".to_string()))?;
+    let user_id =
+        UserId::parse(&req.user_id).map_err(|_| ApiError::BadRequest("Invalid user_id".into()))?;
 
     let portal = state
         .billing
         .create_portal_session(&user_id, req.return_url.as_deref())
         .await?;
 
-    metrics::histogram!("billing_operation_duration_seconds", "operation" => "create_portal")
-        .record(start.elapsed().as_secs_f64());
+    record_op_duration("create_portal", start, true);
 
     Ok(Json(PortalResponse { url: portal.url }))
 }

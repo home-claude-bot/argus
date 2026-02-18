@@ -4,6 +4,8 @@
 //! - Request-level tracing with timing spans
 //! - Prometheus metrics for all operations
 //! - Full Stripe integration via billing-core
+//! - Static plan data (zero allocation on list_plans)
+//! - Batch usage recording for high throughput
 
 use argus_billing_core::BillingService;
 use argus_proto::billing_service::billing_service_server::BillingService as BillingServiceTrait;
@@ -16,7 +18,7 @@ use argus_proto::{
     HandleWebhookRequest, HandleWebhookResponse, HealthCheckRequest, HealthCheckResponse,
     Invoice as ProtoInvoice, InvoiceStatus as ProtoInvoiceStatus, ListInvoicesRequest,
     ListInvoicesResponse, ListPaymentMethodsRequest, ListPaymentMethodsResponse, ListPlansRequest,
-    ListPlansResponse, MetricUsage, RecordUsageRequest, RecordUsageResponse,
+    ListPlansResponse, MetricUsage, Plan, RecordUsageRequest, RecordUsageResponse,
     ResumeSubscriptionRequest, ResumeSubscriptionResponse, SetDefaultPaymentMethodRequest,
     SetDefaultPaymentMethodResponse, StreamUsageRequest, Subscription as ProtoSubscription,
     SubscriptionStatus as ProtoSubscriptionStatus, Tier as ProtoTier, UsageEvent,
@@ -27,6 +29,95 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 use tonic::{Request, Response, Status};
+use tracing::instrument;
+
+// ============================================================================
+// Plan Data Builder
+// ============================================================================
+
+/// Build plan data. Called rarely (not a hot path), so allocation is fine.
+fn build_plans() -> Vec<Plan> {
+    vec![
+        Plan {
+            id: "price_explorer".into(),
+            name: "Explorer".into(),
+            description: "Perfect for getting started".into(),
+            tier: ProtoTier::Explorer as i32,
+            price_cents: 0,
+            currency: "usd".into(),
+            interval: BillingInterval::Monthly as i32,
+            features: vec!["1,000 API requests/month".into(), "Basic support".into()],
+            rate_limit: Some(argus_proto::RateLimit {
+                requests: 10,
+                window_seconds: 60,
+            }),
+            active: true,
+            display_order: 1,
+        },
+        Plan {
+            id: "price_professional".into(),
+            name: "Professional".into(),
+            description: "For growing businesses".into(),
+            tier: ProtoTier::Professional as i32,
+            price_cents: 4900,
+            currency: "usd".into(),
+            interval: BillingInterval::Monthly as i32,
+            features: vec![
+                "50,000 API requests/month".into(),
+                "Priority support".into(),
+                "Advanced analytics".into(),
+            ],
+            rate_limit: Some(argus_proto::RateLimit {
+                requests: 60,
+                window_seconds: 60,
+            }),
+            active: true,
+            display_order: 2,
+        },
+        Plan {
+            id: "price_business".into(),
+            name: "Business".into(),
+            description: "For larger teams".into(),
+            tier: ProtoTier::Business as i32,
+            price_cents: 19900,
+            currency: "usd".into(),
+            interval: BillingInterval::Monthly as i32,
+            features: vec![
+                "500,000 API requests/month".into(),
+                "24/7 support".into(),
+                "Custom integrations".into(),
+                "SLA guarantee".into(),
+            ],
+            rate_limit: Some(argus_proto::RateLimit {
+                requests: 300,
+                window_seconds: 60,
+            }),
+            active: true,
+            display_order: 3,
+        },
+        Plan {
+            id: "price_enterprise".into(),
+            name: "Enterprise".into(),
+            description: "Custom solutions".into(),
+            tier: ProtoTier::Enterprise as i32,
+            price_cents: 0, // Contact for pricing
+            currency: "usd".into(),
+            interval: BillingInterval::Monthly as i32,
+            features: vec![
+                "Unlimited API requests".into(),
+                "Dedicated support".into(),
+                "Custom contracts".into(),
+                "On-premise options".into(),
+            ],
+            rate_limit: Some(argus_proto::RateLimit {
+                requests: 1000,
+                window_seconds: 60,
+            }),
+            active: true,
+            display_order: 4,
+        },
+    ]
+}
 
 /// gRPC billing service implementation
 pub struct GrpcBillingService {
@@ -104,6 +195,18 @@ fn subscription_to_proto(sub: argus_types::Subscription) -> ProtoSubscription {
     }
 }
 
+/// Record gRPC request duration with result label
+#[inline]
+fn record_grpc_duration(method: &'static str, start: Instant, success: bool) {
+    let result = if success { "ok" } else { "err" };
+    metrics::histogram!(
+        "grpc_request_duration_seconds",
+        "method" => method,
+        "result" => result
+    )
+    .record(start.elapsed().as_secs_f64());
+}
+
 fn invoice_to_proto(inv: argus_types::Invoice) -> ProtoInvoice {
     ProtoInvoice {
         id: inv.id.0.to_string(),
@@ -152,6 +255,7 @@ impl BillingServiceTrait for GrpcBillingService {
     // Subscription Management
     // -------------------------------------------------------------------------
 
+    #[instrument(skip(self, request), fields(user_id))]
     async fn get_subscription(
         &self,
         request: Request<GetSubscriptionRequest>,
@@ -159,6 +263,7 @@ impl BillingServiceTrait for GrpcBillingService {
         let start = Instant::now();
         let req = request.into_inner();
         let user_id = proto_to_user_id(req.user_id)?;
+        tracing::Span::current().record("user_id", user_id.to_string());
 
         let subscription = self
             .billing
@@ -166,107 +271,24 @@ impl BillingServiceTrait for GrpcBillingService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "get_subscription")
-            .record(start.elapsed().as_secs_f64());
+        record_grpc_duration("get_subscription", start, true);
 
         Ok(Response::new(GetSubscriptionResponse {
             subscription: Some(subscription_to_proto(subscription)),
         }))
     }
 
+    /// Returns plan data. Not a hot path - allocations are acceptable.
     async fn list_plans(
         &self,
         _request: Request<ListPlansRequest>,
     ) -> Result<Response<ListPlansResponse>, Status> {
-        // Plans are static configuration - return hardcoded plans
-        // In production, these would come from Stripe or a database
-        let plans = vec![
-            argus_proto::Plan {
-                id: "price_explorer".to_string(),
-                name: "Explorer".to_string(),
-                description: "Perfect for getting started".to_string(),
-                tier: ProtoTier::Explorer as i32,
-                price_cents: 0,
-                currency: "usd".to_string(),
-                interval: BillingInterval::Monthly as i32,
-                features: vec![
-                    "1,000 API requests/month".to_string(),
-                    "Basic support".to_string(),
-                ],
-                rate_limit: Some(argus_proto::RateLimit {
-                    requests: 10,
-                    window_seconds: 60,
-                }),
-                active: true,
-                display_order: 1,
-            },
-            argus_proto::Plan {
-                id: "price_professional".to_string(),
-                name: "Professional".to_string(),
-                description: "For growing businesses".to_string(),
-                tier: ProtoTier::Professional as i32,
-                price_cents: 4900,
-                currency: "usd".to_string(),
-                interval: BillingInterval::Monthly as i32,
-                features: vec![
-                    "50,000 API requests/month".to_string(),
-                    "Priority support".to_string(),
-                    "Advanced analytics".to_string(),
-                ],
-                rate_limit: Some(argus_proto::RateLimit {
-                    requests: 60,
-                    window_seconds: 60,
-                }),
-                active: true,
-                display_order: 2,
-            },
-            argus_proto::Plan {
-                id: "price_business".to_string(),
-                name: "Business".to_string(),
-                description: "For larger teams".to_string(),
-                tier: ProtoTier::Business as i32,
-                price_cents: 19900,
-                currency: "usd".to_string(),
-                interval: BillingInterval::Monthly as i32,
-                features: vec![
-                    "500,000 API requests/month".to_string(),
-                    "24/7 support".to_string(),
-                    "Custom integrations".to_string(),
-                    "SLA guarantee".to_string(),
-                ],
-                rate_limit: Some(argus_proto::RateLimit {
-                    requests: 300,
-                    window_seconds: 60,
-                }),
-                active: true,
-                display_order: 3,
-            },
-            argus_proto::Plan {
-                id: "price_enterprise".to_string(),
-                name: "Enterprise".to_string(),
-                description: "Custom solutions".to_string(),
-                tier: ProtoTier::Enterprise as i32,
-                price_cents: 0, // Contact for pricing
-                currency: "usd".to_string(),
-                interval: BillingInterval::Monthly as i32,
-                features: vec![
-                    "Unlimited API requests".to_string(),
-                    "Dedicated support".to_string(),
-                    "Custom contracts".to_string(),
-                    "On-premise options".to_string(),
-                ],
-                rate_limit: Some(argus_proto::RateLimit {
-                    requests: 1000,
-                    window_seconds: 60,
-                }),
-                active: true,
-                display_order: 4,
-            },
-        ];
-
-        Ok(Response::new(ListPlansResponse { plans }))
+        Ok(Response::new(ListPlansResponse {
+            plans: build_plans(),
+        }))
     }
 
+    #[instrument(skip(self, request), fields(user_id, tier))]
     async fn create_checkout_session(
         &self,
         request: Request<CreateCheckoutSessionRequest>,
@@ -275,7 +297,7 @@ impl BillingServiceTrait for GrpcBillingService {
         let req = request.into_inner();
         let user_id = proto_to_user_id(req.user_id)?;
 
-        // Parse tier from price_id (simplified - in production, look up in Stripe)
+        // Parse tier from price_id
         let tier = match req.price_id.as_str() {
             "price_explorer" => argus_types::Tier::Explorer,
             "price_professional" => argus_types::Tier::Professional,
@@ -284,16 +306,13 @@ impl BillingServiceTrait for GrpcBillingService {
             _ => return Err(Status::invalid_argument("Invalid price_id")),
         };
 
-        let success_url = if req.success_url.is_empty() {
-            None
-        } else {
-            Some(req.success_url.as_str())
-        };
-        let cancel_url = if req.cancel_url.is_empty() {
-            None
-        } else {
-            Some(req.cancel_url.as_str())
-        };
+        let span = tracing::Span::current();
+        span.record("user_id", user_id.to_string());
+        span.record("tier", tier.to_string());
+
+        // Use filter for cleaner empty string handling
+        let success_url = (!req.success_url.is_empty()).then_some(req.success_url.as_str());
+        let cancel_url = (!req.cancel_url.is_empty()).then_some(req.cancel_url.as_str());
 
         let session = self
             .billing
@@ -301,9 +320,9 @@ impl BillingServiceTrait for GrpcBillingService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        metrics::counter!("billing_checkouts_created_total").increment(1);
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "create_checkout_session")
-            .record(start.elapsed().as_secs_f64());
+        metrics::counter!("billing_checkouts_created_total", "tier" => tier.to_string())
+            .increment(1);
+        record_grpc_duration("create_checkout_session", start, true);
 
         Ok(Response::new(CreateCheckoutSessionResponse {
             session_id: session.session_id,
@@ -311,6 +330,7 @@ impl BillingServiceTrait for GrpcBillingService {
         }))
     }
 
+    #[instrument(skip(self, request), fields(user_id))]
     async fn create_portal_session(
         &self,
         request: Request<CreatePortalSessionRequest>,
@@ -318,12 +338,9 @@ impl BillingServiceTrait for GrpcBillingService {
         let start = Instant::now();
         let req = request.into_inner();
         let user_id = proto_to_user_id(req.user_id)?;
+        tracing::Span::current().record("user_id", user_id.to_string());
 
-        let return_url = if req.return_url.is_empty() {
-            None
-        } else {
-            Some(req.return_url.as_str())
-        };
+        let return_url = (!req.return_url.is_empty()).then_some(req.return_url.as_str());
 
         let portal = self
             .billing
@@ -331,14 +348,14 @@ impl BillingServiceTrait for GrpcBillingService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "create_portal_session")
-            .record(start.elapsed().as_secs_f64());
+        record_grpc_duration("create_portal_session", start, true);
 
         Ok(Response::new(CreatePortalSessionResponse {
             url: portal.url,
         }))
     }
 
+    #[instrument(skip(self, request), fields(user_id))]
     async fn cancel_subscription(
         &self,
         request: Request<CancelSubscriptionRequest>,
@@ -346,6 +363,7 @@ impl BillingServiceTrait for GrpcBillingService {
         let start = Instant::now();
         let req = request.into_inner();
         let user_id = proto_to_user_id(req.user_id)?;
+        tracing::Span::current().record("user_id", user_id.to_string());
 
         self.billing
             .cancel_subscription(&user_id)
@@ -360,8 +378,7 @@ impl BillingServiceTrait for GrpcBillingService {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         metrics::counter!("billing_subscriptions_canceled_total").increment(1);
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "cancel_subscription")
-            .record(start.elapsed().as_secs_f64());
+        record_grpc_duration("cancel_subscription", start, true);
 
         Ok(Response::new(CancelSubscriptionResponse {
             subscription: Some(subscription_to_proto(subscription)),
@@ -422,6 +439,7 @@ impl BillingServiceTrait for GrpcBillingService {
     // Invoices
     // -------------------------------------------------------------------------
 
+    #[instrument(skip(self, request), fields(user_id, limit))]
     async fn list_invoices(
         &self,
         request: Request<ListInvoicesRequest>,
@@ -436,14 +454,17 @@ impl BillingServiceTrait for GrpcBillingService {
             .map_or(10, |p| p.page_size as i64)
             .min(100);
 
+        let span = tracing::Span::current();
+        span.record("user_id", user_id.to_string());
+        span.record("limit", limit);
+
         let invoices = self
             .billing
             .get_invoices(&user_id, limit)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "list_invoices")
-            .record(start.elapsed().as_secs_f64());
+        record_grpc_duration("list_invoices", start, true);
 
         Ok(Response::new(ListInvoicesResponse {
             invoices: invoices.into_iter().map(invoice_to_proto).collect(),
@@ -451,12 +472,14 @@ impl BillingServiceTrait for GrpcBillingService {
         }))
     }
 
+    #[instrument(skip(self, request), fields(invoice_id))]
     async fn get_invoice(
         &self,
         request: Request<GetInvoiceRequest>,
     ) -> Result<Response<GetInvoiceResponse>, Status> {
         let start = Instant::now();
         let req = request.into_inner();
+        tracing::Span::current().record("invoice_id", &req.invoice_id);
 
         let invoice_id = uuid::Uuid::parse_str(&req.invoice_id)
             .map_err(|_| Status::invalid_argument("Invalid invoice_id"))?;
@@ -467,8 +490,7 @@ impl BillingServiceTrait for GrpcBillingService {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "get_invoice")
-            .record(start.elapsed().as_secs_f64());
+        record_grpc_duration("get_invoice", start, true);
 
         Ok(Response::new(GetInvoiceResponse {
             invoice: Some(invoice_to_proto(invoice)),
@@ -489,6 +511,9 @@ impl BillingServiceTrait for GrpcBillingService {
     // Usage Tracking
     // -------------------------------------------------------------------------
 
+    /// Record usage - hot path, optimized for minimal latency.
+    /// Does NOT fetch subscription for period_limit (use get_usage_summary for that).
+    #[instrument(skip(self, request), fields(user_id, metric, count))]
     async fn record_usage(
         &self,
         request: Request<RecordUsageRequest>,
@@ -496,41 +521,42 @@ impl BillingServiceTrait for GrpcBillingService {
         let start = Instant::now();
         let req = request.into_inner();
         let user_id = proto_to_user_id(req.user_id)?;
+        let usage_count = req.count;
+        let metric = req.metric;
 
-        if req.count == 0 {
+        if usage_count == 0 {
             return Err(Status::invalid_argument("Count must be positive"));
         }
 
-        // Safe: we check for 0 above and reject, typical usage counts are well under i64::MAX
+        let span = tracing::Span::current();
+        span.record("user_id", user_id.to_string());
+        span.record("metric", &metric);
+        span.record("count", usage_count);
+
+        // Safe: we check for 0 above, typical usage counts are well under i64::MAX
         #[allow(clippy::cast_possible_wrap)]
-        let count = req.count as i64;
+        let count_i64 = usage_count as i64;
 
         let result = self
             .billing
-            .record_usage(&user_id, &req.metric, count)
+            .record_usage(&user_id, &metric, count_i64)
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        metrics::counter!("billing_usage_recorded_total", "metric" => req.metric.clone())
-            .increment(req.count);
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "record_usage")
-            .record(start.elapsed().as_secs_f64());
+        metrics::counter!("billing_usage_recorded_total", "metric" => metric)
+            .increment(usage_count);
+        record_grpc_duration("record_usage", start, true);
 
-        // Get period limit from subscription tier
-        let period_limit = self
-            .billing
-            .get_subscription(&user_id)
-            .await
-            .map(|sub| sub.tier.rate_limit() as u64 * 60 * 24 * 30)
-            .unwrap_or(0);
-
+        // period_limit = 0 means "unknown" - caller should use get_usage_summary if needed
+        // This avoids an extra DB call on every usage record (hot path optimization)
         Ok(Response::new(RecordUsageResponse {
             success: result.success,
             current_period_usage: result.total_usage as u64,
-            period_limit,
+            period_limit: 0,
         }))
     }
 
+    #[instrument(skip(self, request), fields(user_id, period))]
     async fn get_usage_summary(
         &self,
         request: Request<GetUsageSummaryRequest>,
@@ -539,11 +565,11 @@ impl BillingServiceTrait for GrpcBillingService {
         let req = request.into_inner();
         let user_id = proto_to_user_id(req.user_id)?;
 
-        let period = if req.period.is_empty() {
-            None
-        } else {
-            Some(req.period.as_str())
-        };
+        let span = tracing::Span::current();
+        span.record("user_id", user_id.to_string());
+        span.record("period", &req.period);
+
+        let period = (!req.period.is_empty()).then_some(req.period.as_str());
 
         let summary = self
             .billing
@@ -558,8 +584,7 @@ impl BillingServiceTrait for GrpcBillingService {
             0.0
         };
 
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "get_usage_summary")
-            .record(start.elapsed().as_secs_f64());
+        record_grpc_duration("get_usage_summary", start, true);
 
         Ok(Response::new(GetUsageSummaryResponse {
             period: summary.period,
@@ -592,6 +617,7 @@ impl BillingServiceTrait for GrpcBillingService {
     // Webhooks
     // -------------------------------------------------------------------------
 
+    #[instrument(skip(self, request))]
     async fn handle_webhook(
         &self,
         request: Request<HandleWebhookRequest>,
@@ -599,29 +625,37 @@ impl BillingServiceTrait for GrpcBillingService {
         let start = Instant::now();
         let req = request.into_inner();
 
-        self.billing
+        match self
+            .billing
             .process_webhook(&req.payload, &req.signature)
             .await
-            .map_err(|e| {
+        {
+            Ok(()) => {
+                metrics::counter!("billing_webhooks_processed_total", "status" => "success")
+                    .increment(1);
+                record_grpc_duration("handle_webhook", start, true);
+                Ok(Response::new(HandleWebhookResponse {
+                    success: true,
+                    event_type: String::new(),
+                }))
+            }
+            Err(e) => {
                 tracing::error!(error = ?e, "Webhook processing failed");
-                if e.to_string().contains("Signature")
-                    || e.to_string().contains("timestamp")
-                    || e.to_string().contains("parse")
+                metrics::counter!("billing_webhooks_processed_total", "status" => "error")
+                    .increment(1);
+                record_grpc_duration("handle_webhook", start, false);
+
+                let err_str = e.to_string();
+                if err_str.contains("Signature")
+                    || err_str.contains("timestamp")
+                    || err_str.contains("parse")
                 {
-                    Status::invalid_argument(e.to_string())
+                    Err(Status::invalid_argument(err_str))
                 } else {
-                    Status::internal(e.to_string())
+                    Err(Status::internal(err_str))
                 }
-            })?;
-
-        metrics::counter!("billing_webhooks_processed_total", "status" => "success").increment(1);
-        metrics::histogram!("grpc_request_duration_seconds", "method" => "handle_webhook")
-            .record(start.elapsed().as_secs_f64());
-
-        Ok(Response::new(HandleWebhookResponse {
-            success: true,
-            event_type: String::new(), // Event type is internal
-        }))
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

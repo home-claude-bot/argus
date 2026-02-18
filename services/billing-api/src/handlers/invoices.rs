@@ -4,12 +4,25 @@ use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
+use tracing::instrument;
 use uuid::Uuid;
 
 use argus_types::{InvoiceId, UserId};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+
+/// Record HTTP operation duration with result label
+#[inline]
+fn record_op_duration(operation: &'static str, start: Instant, success: bool) {
+    let result = if success { "ok" } else { "err" };
+    metrics::histogram!(
+        "billing_operation_duration_seconds",
+        "operation" => operation,
+        "result" => result
+    )
+    .record(start.elapsed().as_secs_f64());
+}
 
 // ============================================================================
 // Request/Response Types
@@ -47,21 +60,22 @@ pub struct ListInvoicesResponse {
 // ============================================================================
 
 /// GET /api/v1/billing/invoices
+#[instrument(skip(state, req), fields(user_id = %req.user_id, limit))]
 pub async fn list_invoices(
     State(state): State<AppState>,
     Json(req): Json<ListInvoicesRequest>,
 ) -> ApiResult<Json<ListInvoicesResponse>> {
     let start = Instant::now();
 
-    let user_id = UserId::parse(&req.user_id)
-        .map_err(|_| ApiError::BadRequest("Invalid user_id".to_string()))?;
+    let user_id =
+        UserId::parse(&req.user_id).map_err(|_| ApiError::BadRequest("Invalid user_id".into()))?;
 
     let limit = req.limit.unwrap_or(10).min(100);
+    tracing::Span::current().record("limit", limit);
 
     let invoices = state.billing.get_invoices(&user_id, limit).await?;
 
-    metrics::histogram!("billing_operation_duration_seconds", "operation" => "list_invoices")
-        .record(start.elapsed().as_secs_f64());
+    record_op_duration("list_invoices", start, true);
 
     Ok(Json(ListInvoicesResponse {
         invoices: invoices.into_iter().map(invoice_to_response).collect(),
@@ -69,6 +83,7 @@ pub async fn list_invoices(
 }
 
 /// GET /api/v1/billing/invoices/:id
+#[instrument(skip(state), fields(invoice_id = %invoice_id))]
 pub async fn get_invoice(
     State(state): State<AppState>,
     Path(invoice_id): Path<Uuid>,
@@ -78,8 +93,7 @@ pub async fn get_invoice(
     let invoice_id = InvoiceId(invoice_id);
     let invoice = state.billing.get_invoice(&invoice_id).await?;
 
-    metrics::histogram!("billing_operation_duration_seconds", "operation" => "get_invoice")
-        .record(start.elapsed().as_secs_f64());
+    record_op_duration("get_invoice", start, true);
 
     Ok(Json(invoice_to_response(invoice)))
 }
