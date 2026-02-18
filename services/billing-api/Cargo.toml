@@ -61,3 +61,7 @@ dotenvy = "0.15"
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+chrono = { workspace = true }
+hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"

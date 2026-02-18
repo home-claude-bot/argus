@@ -2,6 +2,7 @@
 
 pub mod health;
 pub mod invoices;
+pub mod shared;
 pub mod subscription;
 pub mod usage;
 pub mod webhook;

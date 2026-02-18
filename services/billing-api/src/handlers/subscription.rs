@@ -8,20 +8,9 @@ use tracing::instrument;
 
 use argus_types::{Tier, UserId};
 
+use super::shared::record_op_duration;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-
-/// Record HTTP operation duration with result label
-#[inline]
-fn record_op_duration(operation: &'static str, start: Instant, success: bool) {
-    let result = if success { "ok" } else { "err" };
-    metrics::histogram!(
-        "billing_operation_duration_seconds",
-        "operation" => operation,
-        "result" => result
-    )
-    .record(start.elapsed().as_secs_f64());
-}
 
 // ============================================================================
 // Request/Response Types

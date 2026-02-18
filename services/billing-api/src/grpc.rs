@@ -32,6 +32,45 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 // ============================================================================
+// Input Validation (Security)
+// ============================================================================
+
+/// Maximum length for metric names (prevents cardinality explosion)
+const MAX_METRIC_NAME_LEN: usize = 64;
+
+/// Validate a metric name for safe use in metrics and database.
+/// Security: Prevents metrics cardinality attacks and injection.
+#[allow(clippy::result_large_err)]
+fn validate_metric_name(name: &str) -> Result<(), Status> {
+    if name.is_empty() {
+        return Err(Status::invalid_argument("Metric name cannot be empty"));
+    }
+    if name.len() > MAX_METRIC_NAME_LEN {
+        return Err(Status::invalid_argument(format!(
+            "Metric name too long (max {MAX_METRIC_NAME_LEN} chars)"
+        )));
+    }
+    // Allow: a-z, A-Z, 0-9, _, -, .
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
+        return Err(Status::invalid_argument(
+            "Metric name contains invalid characters",
+        ));
+    }
+    // Must start with letter or underscore
+    if let Some(first) = name.chars().next() {
+        if !first.is_ascii_alphabetic() && first != '_' {
+            return Err(Status::invalid_argument(
+                "Metric name must start with letter or underscore",
+            ));
+        }
+    }
+    Ok(())
+}
+
+// ============================================================================
 // Plan Data Builder
 // ============================================================================
 
@@ -523,6 +562,9 @@ impl BillingServiceTrait for GrpcBillingService {
         let user_id = proto_to_user_id(req.user_id)?;
         let usage_count = req.count;
         let metric = req.metric;
+
+        // Input validation (security: prevent injection and cardinality attacks)
+        validate_metric_name(&metric)?;
 
         if usage_count == 0 {
             return Err(Status::invalid_argument("Count must be positive"));

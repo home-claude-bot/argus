@@ -8,20 +8,9 @@ use tracing::instrument;
 
 use argus_types::UserId;
 
+use super::shared::{record_op_duration, validate_metric_name};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-
-/// Record HTTP operation duration with result label
-#[inline]
-fn record_op_duration(operation: &'static str, start: Instant, success: bool) {
-    let result = if success { "ok" } else { "err" };
-    metrics::histogram!(
-        "billing_operation_duration_seconds",
-        "operation" => operation,
-        "result" => result
-    )
-    .record(start.elapsed().as_secs_f64());
-}
 
 // ============================================================================
 // Request/Response Types
@@ -73,8 +62,10 @@ pub async fn record_usage(
 ) -> ApiResult<Json<RecordUsageResponse>> {
     let start = Instant::now();
 
+    // Input validation (security: prevent injection and cardinality attacks)
     let user_id =
         UserId::parse(&req.user_id).map_err(|_| ApiError::BadRequest("Invalid user_id".into()))?;
+    validate_metric_name(&req.metric)?;
 
     if req.quantity <= 0 {
         return Err(ApiError::BadRequest("Quantity must be positive".into()));
@@ -86,6 +77,7 @@ pub async fn record_usage(
         .await?;
 
     // Record usage metric (owned string needed for metrics)
+    // SECURITY: metric name is validated above, safe for use as label
     let metric_name = req.metric;
     metrics::counter!("billing_usage_recorded_total", "metric" => metric_name)
         .increment(req.quantity as u64);

@@ -1,20 +1,29 @@
 //! Error types for the Billing API service.
+//!
+//! Security design:
+//! - Internal errors NEVER leak to clients (DB errors, stack traces, etc.)
+//! - Error codes are generic to prevent enumeration attacks
+//! - Request IDs enable correlation without exposing internals
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
-/// API error response
+/// API error response - safe for client consumption
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: ErrorDetail,
 }
 
+/// Error detail - sanitized for external exposure
 #[derive(Debug, Serialize)]
 pub struct ErrorDetail {
+    /// Machine-readable error code
     pub code: String,
+    /// Human-readable message (sanitized - no internal details)
     pub message: String,
+    /// Additional context (only for client-fixable errors)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
 }
@@ -88,18 +97,41 @@ impl IntoResponse for ApiError {
         let status = self.status_code();
         let code = self.error_code();
 
-        // Log internal errors
-        if matches!(
-            self,
-            Self::Internal(_) | Self::Database(_) | Self::Billing(_)
-        ) {
-            tracing::error!(error = ?self, "Internal API error");
+        // SECURITY: Sanitize error messages to prevent information leakage
+        // Internal errors get generic messages; client errors get specific guidance
+        let (message, should_log) = match &self {
+            // Client errors - safe to expose details
+            Self::SubscriptionNotFound => ("Subscription not found".to_string(), false),
+            Self::InvoiceNotFound => ("Invoice not found".to_string(), false),
+            Self::UserNotFound => ("User not found".to_string(), false),
+            Self::CustomerNotFound => ("Billing account not configured".to_string(), false),
+            Self::Forbidden(reason) => (format!("Access denied: {reason}"), false),
+            Self::BadRequest(reason) => (format!("Invalid request: {reason}"), false),
+            Self::WebhookError(_) => ("Webhook processing failed".to_string(), true),
+
+            // SECURITY: Internal errors - NEVER expose details to client
+            Self::Internal(internal_msg) => {
+                tracing::error!(error = %internal_msg, "Internal error");
+                ("An internal error occurred".to_string(), false)
+            }
+            Self::Database(db_err) => {
+                tracing::error!(error = ?db_err, "Database error");
+                ("An internal error occurred".to_string(), false)
+            }
+            Self::Billing(billing_err) => {
+                tracing::error!(error = ?billing_err, "Billing service error");
+                ("An internal error occurred".to_string(), false)
+            }
+        };
+
+        if should_log {
+            tracing::warn!(code = %code, "API error response");
         }
 
         let body = ErrorResponse {
             error: ErrorDetail {
                 code: code.to_string(),
-                message: self.to_string(),
+                message,
                 details: None,
             },
         };
