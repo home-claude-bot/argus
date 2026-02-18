@@ -8,13 +8,14 @@ use sha2::Sha256;
 
 /// Generate a valid Stripe webhook signature for testing
 fn generate_stripe_signature(payload: &[u8], secret: &str, timestamp: i64) -> String {
-    let signed_payload = format!("{}.{}", timestamp, std::str::from_utf8(payload).unwrap());
+    let payload_str = std::str::from_utf8(payload).unwrap();
+    let signed_payload = format!("{timestamp}.{payload_str}");
 
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
     mac.update(signed_payload.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
 
-    format!("t={},v1={}", timestamp, signature)
+    format!("t={timestamp},v1={signature}")
 }
 
 /// Generate a webhook payload for testing
@@ -149,8 +150,8 @@ fn test_malformed_signature_rejection() {
     assert!(!sig2.contains("v1="));
 
     // Empty signature
-    let sig3 = "";
-    assert!(sig3.is_empty());
+    let sig3: &str = "";
+    assert_eq!(sig3.len(), 0);
 
     // Invalid format
     let sig4 = "invalid_format";

@@ -213,7 +213,7 @@ fn test_invalid_user_id_formats() {
         if *id == "550e8400e29b41d4a716446655440000" {
             continue;
         }
-        assert!(uuid::Uuid::parse_str(id).is_err(), "Should reject: {}", id);
+        assert!(uuid::Uuid::parse_str(id).is_err(), "Should reject: {id}");
     }
 }
 
@@ -254,12 +254,12 @@ fn test_quantity_must_be_positive() {
 #[test]
 fn test_quantity_overflow_safety() {
     // Ensure we handle edge cases
-    let max_u64: u64 = u64::MAX;
-    let max_i64: i64 = i64::MAX;
+    let unsigned_max: u64 = u64::MAX;
+    let signed_max: i64 = i64::MAX;
 
     // i64::MAX fits in u64
-    assert!(max_i64 as u64 <= max_u64);
+    assert!(signed_max as u64 <= unsigned_max);
 
     // But u64::MAX doesn't fit in i64
-    assert!(max_u64 > max_i64 as u64);
+    assert!(unsigned_max > signed_max as u64);
 }
