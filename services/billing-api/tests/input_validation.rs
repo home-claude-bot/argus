@@ -202,7 +202,7 @@ fn test_invalid_user_id_formats() {
     let invalid_ids = [
         "",
         "not-a-uuid",
-        "550e8400-e29b-41d4-a716", // truncated
+        "550e8400-e29b-41d4-a716",          // truncated
         "550e8400e29b41d4a716446655440000", // no hyphens (actually valid!)
         "550e8400-e29b-41d4-a716-446655440000-extra",
         "' OR 1=1 --", // SQL injection attempt
@@ -213,11 +213,7 @@ fn test_invalid_user_id_formats() {
         if *id == "550e8400e29b41d4a716446655440000" {
             continue;
         }
-        assert!(
-            uuid::Uuid::parse_str(id).is_err(),
-            "Should reject: {}",
-            id
-        );
+        assert!(uuid::Uuid::parse_str(id).is_err(), "Should reject: {}", id);
     }
 }
 

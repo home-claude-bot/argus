@@ -8,11 +8,7 @@ use sha2::Sha256;
 
 /// Generate a valid Stripe webhook signature for testing
 fn generate_stripe_signature(payload: &[u8], secret: &str, timestamp: i64) -> String {
-    let signed_payload = format!(
-        "{}.{}",
-        timestamp,
-        std::str::from_utf8(payload).unwrap()
-    );
+    let signed_payload = format!("{}.{}", timestamp, std::str::from_utf8(payload).unwrap());
 
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
     mac.update(signed_payload.as_bytes());
