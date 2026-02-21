@@ -8,6 +8,8 @@
 //! - `argus_client_request_duration_seconds` - Histogram of request latencies
 //! - `argus_client_retries_total` - Counter of retry attempts
 //! - `argus_client_connections_total` - Counter of connection events
+//! - `argus_client_cache_hits` - Counter of cache hits (when using `CachedAuthClient`)
+//! - `argus_client_cache_misses` - Counter of cache misses
 //!
 //! # Usage
 //!
@@ -24,6 +26,20 @@
 //! // Use client as normal - metrics are recorded automatically
 //! let client = AuthClient::connect(config).await?;
 //! client.validate_token("token").await?;
+//! ```
+//!
+//! # Prometheus Endpoint (with `prometheus` feature)
+//!
+//! Enable the `prometheus` feature for easy `/metrics` endpoint support:
+//!
+//! ```ignore
+//! use argus_client::metrics::MetricsHandle;
+//!
+//! // Install recorder and get handle for rendering
+//! let handle = MetricsHandle::install().unwrap();
+//!
+//! // In your HTTP handler:
+//! let metrics_text = handle.render();
 //! ```
 
 use std::time::Instant;
@@ -239,6 +255,12 @@ impl Drop for RequestTimer {
     }
 }
 
+/// Metric name for cache hits.
+pub const CACHE_HITS: &str = "argus_client_cache_hits";
+
+/// Metric name for cache misses.
+pub const CACHE_MISSES: &str = "argus_client_cache_misses";
+
 /// Describe all metrics for registration with a recorder.
 ///
 /// Call this during application startup to register metric descriptions.
@@ -272,7 +294,117 @@ pub fn describe_metrics() {
         Unit::Count,
         "Total number of connection events (connect, disconnect, error)"
     );
+
+    describe_counter!(CACHE_HITS, Unit::Count, "Total number of cache hits");
+
+    describe_counter!(CACHE_MISSES, Unit::Count, "Total number of cache misses");
 }
+
+// =============================================================================
+// Prometheus Exporter (with `prometheus` feature)
+// =============================================================================
+
+/// Handle to the Prometheus metrics recorder.
+///
+/// Provides methods to render metrics in Prometheus text format
+/// for use with a `/metrics` HTTP endpoint.
+///
+/// # Example
+///
+/// ```ignore
+/// use argus_client::metrics::MetricsHandle;
+///
+/// // Install at application startup
+/// let handle = MetricsHandle::install().expect("failed to install metrics");
+///
+/// // In your Axum/Actix/etc. handler:
+/// async fn metrics_endpoint(
+///     Extension(handle): Extension<MetricsHandle>,
+/// ) -> impl IntoResponse {
+///     (
+///         [("Content-Type", "text/plain; charset=utf-8")],
+///         handle.render(),
+///     )
+/// }
+/// ```
+#[cfg(feature = "prometheus")]
+#[derive(Clone)]
+pub struct MetricsHandle {
+    handle: metrics_exporter_prometheus::PrometheusHandle,
+}
+
+#[cfg(feature = "prometheus")]
+impl MetricsHandle {
+    /// Install the Prometheus recorder globally.
+    ///
+    /// This should be called once at application startup.
+    /// Returns a handle that can be used to render metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a recorder is already installed.
+    pub fn install() -> Result<Self, MetricsInstallError> {
+        use metrics_exporter_prometheus::PrometheusBuilder;
+
+        let builder = PrometheusBuilder::new();
+        let handle = builder
+            .install_recorder()
+            .map_err(|e| MetricsInstallError(e.to_string()))?;
+
+        // Register metric descriptions
+        describe_metrics();
+
+        Ok(Self { handle })
+    }
+
+    /// Install with custom configuration.
+    ///
+    /// Allows setting custom buckets for histograms.
+    pub fn install_with_buckets(buckets: &[f64]) -> Result<Self, MetricsInstallError> {
+        use metrics_exporter_prometheus::PrometheusBuilder;
+
+        let builder = PrometheusBuilder::new()
+            .set_buckets(buckets)
+            .map_err(|e| MetricsInstallError(e.to_string()))?;
+        let handle = builder
+            .install_recorder()
+            .map_err(|e| MetricsInstallError(e.to_string()))?;
+
+        describe_metrics();
+
+        Ok(Self { handle })
+    }
+
+    /// Render metrics in Prometheus text format.
+    ///
+    /// Returns a string suitable for serving at `/metrics`.
+    #[must_use]
+    pub fn render(&self) -> String {
+        self.handle.render()
+    }
+}
+
+#[cfg(feature = "prometheus")]
+impl std::fmt::Debug for MetricsHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MetricsHandle").finish_non_exhaustive()
+    }
+}
+
+/// Error installing the metrics recorder.
+#[cfg(feature = "prometheus")]
+#[derive(Debug, Clone)]
+pub struct MetricsInstallError(String);
+
+#[cfg(feature = "prometheus")]
+impl std::fmt::Display for MetricsInstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "failed to install metrics recorder: {}", self.0)
+    }
+}
+
+#[cfg(feature = "prometheus")]
+impl std::error::Error for MetricsInstallError {}
 
 #[cfg(test)]
 mod tests {

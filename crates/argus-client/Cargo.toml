@@ -11,6 +11,11 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# Enable Prometheus metrics exporter for /metrics endpoint support
+prometheus = ["dep:metrics-exporter-prometheus"]
+
 [dependencies]
 argus-types = { path = "../argus-types" }
 argus-proto = { path = "../argus-proto" }
@@ -24,9 +29,11 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 metrics = "0.24"
 moka = { version = "0.12", features = ["future"] }
+metrics-exporter-prometheus = { version = "0.16", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tonic = { workspace = true, features = ["tls"] }
 async-trait = { workspace = true }
 tempfile = "3.19"
+metrics-exporter-prometheus = "0.16"

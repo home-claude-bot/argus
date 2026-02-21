@@ -498,7 +498,7 @@ fn test_llm_model_tier_parsing() {
 fn test_llm_usage_event_builder() {
     let user_id = UserId::new();
 
-    let event = LlmUsageEvent::new(user_id.clone(), "openai", "gpt-4o", 100, 500)
+    let event = LlmUsageEvent::new(user_id, "openai", "gpt-4o", 100, 500)
         .with_latency(1500)
         .with_cost(0.0065)
         .with_request_id("req_abc123");
@@ -510,7 +510,7 @@ fn test_llm_usage_event_builder() {
     assert_eq!(event.output_tokens, 500);
     assert_eq!(event.total_tokens(), 600);
     assert_eq!(event.latency_ms, 1500);
-    assert_eq!(event.cost_usd, 0.0065);
+    assert!((event.cost_usd - 0.0065).abs() < f64::EPSILON);
     assert_eq!(event.request_id, Some("req_abc123".to_string()));
 }
 
@@ -533,7 +533,7 @@ fn test_usage_event_builder() {
     use argus_types::UserId;
 
     let user_id = UserId::parse("550e8400-e29b-41d4-a716-446655440001").unwrap();
-    let event = UsageEvent::new(user_id.clone(), "api_calls", 10);
+    let event = UsageEvent::new(user_id, "api_calls", 10);
 
     assert_eq!(event.user_id, user_id);
     assert_eq!(event.metric, "api_calls");
@@ -655,4 +655,52 @@ fn test_cache_stats_total() {
     };
 
     assert_eq!(stats.total_entries(), 185);
+}
+
+// =============================================================================
+// Prometheus Metrics Tests (with `prometheus` feature)
+// =============================================================================
+
+#[cfg(feature = "prometheus")]
+#[test]
+fn test_metrics_handle_install_and_render() {
+    use argus_client::MetricsHandle;
+
+    // Install the metrics recorder (only works once per process)
+    let handle = MetricsHandle::install();
+
+    // Skip if already installed (from another test in this process)
+    if handle.is_err() {
+        return;
+    }
+
+    let handle = handle.unwrap();
+
+    // Record some metrics
+    argus_client::metrics::record_request(
+        argus_client::metrics::Service::Auth,
+        "validate_token",
+        argus_client::metrics::Status::Success,
+        0.001,
+    );
+
+    // Render should return valid Prometheus text format
+    let output = handle.render();
+    assert!(output.contains("argus_client_requests_total"));
+}
+
+#[cfg(feature = "prometheus")]
+#[test]
+fn test_metrics_install_error_display() {
+    // Construct error manually for testing Display impl
+    let err = std::panic::catch_unwind(|| {
+        // This will fail if handle was already installed
+        argus_client::MetricsHandle::install()
+    });
+
+    // Either way, the error type should exist and have proper Display
+    if let Ok(Err(e)) = err {
+        let display = format!("{e}");
+        assert!(display.contains("failed to install"));
+    }
 }

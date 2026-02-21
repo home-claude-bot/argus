@@ -148,7 +148,10 @@ impl std::fmt::Debug for CachedAuthClient {
                 "entitlement_cache_size",
                 &self.entitlement_cache.entry_count(),
             )
-            .field("rate_limit_cache_size", &self.rate_limit_cache.entry_count())
+            .field(
+                "rate_limit_cache_size",
+                &self.rate_limit_cache.entry_count(),
+            )
             .field("tier_cache_size", &self.tier_cache.entry_count())
             .finish_non_exhaustive()
     }
@@ -245,11 +248,13 @@ impl CachedAuthClient {
         // Try cache first
         if let Some(cached) = self.token_cache.get(&cache_key).await {
             tracing::trace!("token validation cache hit");
-            metrics::counter!("argus_client_cache_hits", "operation" => "validate_token").increment(1);
+            metrics::counter!("argus_client_cache_hits", "operation" => "validate_token")
+                .increment(1);
             return Ok(cached);
         }
 
-        metrics::counter!("argus_client_cache_misses", "operation" => "validate_token").increment(1);
+        metrics::counter!("argus_client_cache_misses", "operation" => "validate_token")
+            .increment(1);
 
         // Fetch from server
         let result = {
@@ -418,7 +423,9 @@ impl CachedAuthClient {
         reason: Option<&str>,
     ) -> Result<bool> {
         let mut client = self.inner.lock().await;
-        client.revoke_session(session_id, requester_id, reason).await
+        client
+            .revoke_session(session_id, requester_id, reason)
+            .await
     }
 
     /// Health check (not cached).
