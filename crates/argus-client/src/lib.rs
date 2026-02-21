@@ -33,6 +33,7 @@
 
 pub mod auth;
 pub mod billing;
+pub mod cache;
 pub mod channel;
 pub mod config;
 pub mod error;
@@ -44,6 +45,7 @@ pub mod retry;
 // Re-export primary types
 pub use auth::AuthClient;
 pub use billing::{BatchUsageResult, BillingClient, CheckoutOptions, LlmUsageEvent, UsageEvent};
+pub use cache::{CacheConfig, CacheStats, CachedAuthClient};
 pub use channel::{ArgusClient, ChannelFactory, SharedArgusClient};
 pub use config::{ClientConfig, ClientConfigBuilder, ConfigError, CredentialSource, TlsConfig};
 pub use error::ClientError;

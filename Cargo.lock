@@ -118,6 +118,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "metrics 0.24.3",
+ "moka",
  "prost-types",
  "tempfile",
  "thiserror 1.0.69",

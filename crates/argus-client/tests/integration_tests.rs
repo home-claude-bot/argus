@@ -609,3 +609,50 @@ fn test_batch_usage_result_counting() {
     assert_eq!(batch_result.failed, 1);
     assert_eq!(batch_result.results.len(), 3);
 }
+
+// =============================================================================
+// Cache Configuration Tests
+// =============================================================================
+
+#[test]
+fn test_cache_config_defaults() {
+    use argus_client::CacheConfig;
+    use std::time::Duration;
+
+    let config = CacheConfig::default();
+    assert_eq!(config.token_ttl, Duration::from_secs(5));
+    assert_eq!(config.entitlement_ttl, Duration::from_secs(5));
+    assert_eq!(config.rate_limit_ttl, Duration::from_secs(1));
+    assert_eq!(config.max_tokens, 10_000);
+}
+
+#[test]
+fn test_cache_config_builder() {
+    use argus_client::CacheConfig;
+    use std::time::Duration;
+
+    let config = CacheConfig::new()
+        .with_token_ttl(Duration::from_secs(10))
+        .with_entitlement_ttl(Duration::from_secs(30))
+        .with_rate_limit_ttl(Duration::from_millis(500))
+        .with_max_tokens(50_000);
+
+    assert_eq!(config.token_ttl, Duration::from_secs(10));
+    assert_eq!(config.entitlement_ttl, Duration::from_secs(30));
+    assert_eq!(config.rate_limit_ttl, Duration::from_millis(500));
+    assert_eq!(config.max_tokens, 50_000);
+}
+
+#[test]
+fn test_cache_stats_total() {
+    use argus_client::CacheStats;
+
+    let stats = CacheStats {
+        token_entries: 100,
+        entitlement_entries: 50,
+        rate_limit_entries: 25,
+        tier_entries: 10,
+    };
+
+    assert_eq!(stats.total_entries(), 185);
+}
