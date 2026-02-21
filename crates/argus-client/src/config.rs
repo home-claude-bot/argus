@@ -782,7 +782,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let debug_output = format!("{:?}", config);
+        let debug_output = format!("{config:?}");
 
         // Token should be redacted
         assert!(debug_output.contains("[REDACTED]"));

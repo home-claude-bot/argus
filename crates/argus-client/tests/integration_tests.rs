@@ -66,7 +66,7 @@ fn test_config_bearer_token_security() {
         .unwrap();
 
     // Token should not appear in debug output
-    let debug = format!("{:?}", config);
+    let debug = format!("{config:?}");
     assert!(!debug.contains("super-secret-api-key"));
     assert!(debug.contains("[REDACTED]"));
 }
