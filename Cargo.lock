@@ -115,10 +115,14 @@ version = "0.1.0"
 dependencies = [
  "argus-proto",
  "argus-types",
+ "chrono",
+ "prost-types",
  "thiserror 1.0.69",
  "tokio",
  "tonic",
+ "tower 0.4.13",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
