@@ -7,8 +7,7 @@
 use std::time::Duration;
 
 use argus_client::{
-    with_retry, ClientConfig, ClientError, CredentialSource, RetryConfig, RetryableError,
-    TlsConfig,
+    with_retry, ClientConfig, ClientError, CredentialSource, RetryConfig, RetryableError, TlsConfig,
 };
 
 // =============================================================================
@@ -95,10 +94,7 @@ fn test_tls_config_credential_sources() {
     let tls = TlsConfig::new()
         .with_ca_cert_source(CredentialSource::pem(b"ca cert data".to_vec()))
         .with_client_cert_source(CredentialSource::env("CLIENT_CERT"))
-        .with_client_key_source(CredentialSource::vault(
-            "secret/data/argus",
-            "client_key",
-        ));
+        .with_client_key_source(CredentialSource::vault("secret/data/argus", "client_key"));
 
     assert!(tls.has_client_cert_source());
 }
@@ -148,10 +144,7 @@ fn test_credential_source_env_not_set() {
     let result = source.load();
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("not set"));
+    assert!(result.unwrap_err().to_string().contains("not set"));
 }
 
 #[test]
@@ -175,10 +168,7 @@ fn test_credential_source_file_not_found() {
     let result = source.load();
 
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("failed to read"));
+    assert!(result.unwrap_err().to_string().contains("failed to read"));
 }
 
 #[test]
@@ -431,15 +421,9 @@ async fn test_shared_client() {
     let shared2 = shared.clone();
 
     let client1 = shared.read().await;
-    assert_eq!(
-        client1.config().auth_endpoint(),
-        "http://localhost:50051"
-    );
+    assert_eq!(client1.config().auth_endpoint(), "http://localhost:50051");
     drop(client1);
 
     let client2 = shared2.read().await;
-    assert_eq!(
-        client2.config().auth_endpoint(),
-        "http://localhost:50051"
-    );
+    assert_eq!(client2.config().auth_endpoint(), "http://localhost:50051");
 }

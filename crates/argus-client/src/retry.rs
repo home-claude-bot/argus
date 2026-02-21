@@ -229,10 +229,7 @@ impl RetryableError for tonic::Status {
     fn is_retryable(&self) -> bool {
         matches!(
             self.code(),
-            Code::Unavailable
-                | Code::ResourceExhausted
-                | Code::Aborted
-                | Code::DeadlineExceeded
+            Code::Unavailable | Code::ResourceExhausted | Code::Aborted | Code::DeadlineExceeded
         )
     }
 }

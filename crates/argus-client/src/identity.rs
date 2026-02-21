@@ -173,7 +173,9 @@ impl IdentityClient {
 
     /// Get an organization by ID.
     pub async fn get_organization(&mut self, org_id: &str) -> Result<Organization> {
-        use argus_proto::{get_organization_request::Identifier, GetOrganizationRequest, OrganizationId};
+        use argus_proto::{
+            get_organization_request::Identifier, GetOrganizationRequest, OrganizationId,
+        };
 
         let request = GetOrganizationRequest {
             identifier: Some(Identifier::Id(OrganizationId {
@@ -240,7 +242,9 @@ impl IdentityClient {
         name: &str,
         scopes: Vec<String>,
     ) -> Result<(ApiKey, String)> {
-        use argus_proto::{create_api_key_request::Owner, CreateApiKeyRequest, UserId as ProtoUserId};
+        use argus_proto::{
+            create_api_key_request::Owner, CreateApiKeyRequest, UserId as ProtoUserId,
+        };
 
         let request = CreateApiKeyRequest {
             name: name.to_string(),
@@ -261,7 +265,9 @@ impl IdentityClient {
 
     /// List API keys for a user.
     pub async fn list_api_keys(&mut self, user_id: &UserId) -> Result<Vec<ApiKey>> {
-        use argus_proto::{list_api_keys_request::Owner, ListApiKeysRequest, UserId as ProtoUserId};
+        use argus_proto::{
+            list_api_keys_request::Owner, ListApiKeysRequest, UserId as ProtoUserId,
+        };
 
         let request = ListApiKeysRequest {
             owner: Some(Owner::UserId(ProtoUserId {
@@ -339,7 +345,11 @@ impl IdentityClient {
         let request = SearchUsersRequest {
             query: query.to_string(),
             tier: tier.map_or(0, |t| tier_to_proto(t) as i32),
-            role: if admin_only { argus_proto::Role::Admin as i32 } else { 0 },
+            role: if admin_only {
+                argus_proto::Role::Admin as i32
+            } else {
+                0
+            },
             pagination: Some(PageRequest {
                 page: 1,
                 page_size: page_size.unwrap_or(50),
@@ -349,9 +359,13 @@ impl IdentityClient {
 
         let response = self.inner.search_users(request).await?.into_inner();
         let users: Vec<User> = response.users.into_iter().map(User::from_proto).collect();
-        let next_cursor = response
-            .pagination
-            .and_then(|p| if p.next_cursor.is_empty() { None } else { Some(p.next_cursor) });
+        let next_cursor = response.pagination.and_then(|p| {
+            if p.next_cursor.is_empty() {
+                None
+            } else {
+                Some(p.next_cursor)
+            }
+        });
 
         Ok((users, next_cursor))
     }
@@ -513,15 +527,23 @@ impl IdentityClient {
             }),
         };
 
-        let response = self.inner.list_organization_members(request).await?.into_inner();
+        let response = self
+            .inner
+            .list_organization_members(request)
+            .await?
+            .into_inner();
         let members: Vec<OrganizationMember> = response
             .members
             .into_iter()
             .map(OrganizationMember::from_proto)
             .collect();
-        let next_cursor = response
-            .pagination
-            .and_then(|p| if p.next_cursor.is_empty() { None } else { Some(p.next_cursor) });
+        let next_cursor = response.pagination.and_then(|p| {
+            if p.next_cursor.is_empty() {
+                None
+            } else {
+                Some(p.next_cursor)
+            }
+        });
 
         Ok((members, next_cursor))
     }
@@ -609,9 +631,13 @@ impl IdentityClient {
             .into_iter()
             .map(Invitation::from_proto)
             .collect();
-        let next_cursor = response
-            .pagination
-            .and_then(|p| if p.next_cursor.is_empty() { None } else { Some(p.next_cursor) });
+        let next_cursor = response.pagination.and_then(|p| {
+            if p.next_cursor.is_empty() {
+                None
+            } else {
+                Some(p.next_cursor)
+            }
+        });
 
         Ok((invitations, next_cursor))
     }
@@ -624,7 +650,9 @@ impl IdentityClient {
         page_size: Option<u32>,
         cursor: Option<&str>,
     ) -> Result<(Vec<Invitation>, Option<String>)> {
-        use argus_proto::{list_invitations_request::Scope, ListInvitationsRequest, OrganizationId, PageRequest};
+        use argus_proto::{
+            list_invitations_request::Scope, ListInvitationsRequest, OrganizationId, PageRequest,
+        };
 
         let request = ListInvitationsRequest {
             scope: Some(Scope::OrganizationId(OrganizationId {
@@ -644,9 +672,13 @@ impl IdentityClient {
             .into_iter()
             .map(Invitation::from_proto)
             .collect();
-        let next_cursor = response
-            .pagination
-            .and_then(|p| if p.next_cursor.is_empty() { None } else { Some(p.next_cursor) });
+        let next_cursor = response.pagination.and_then(|p| {
+            if p.next_cursor.is_empty() {
+                None
+            } else {
+                Some(p.next_cursor)
+            }
+        });
 
         Ok((invitations, next_cursor))
     }
@@ -830,8 +862,7 @@ impl OrganizationMember {
             },
             role,
             joined_at: proto.joined_at.map(|ts| {
-                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-                    .unwrap_or_default()
+                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32).unwrap_or_default()
             }),
         }
     }
@@ -855,12 +886,13 @@ impl OrganizationMembership {
         let role = org_role_from_proto(proto.role());
 
         Self {
-            organization_id: proto.organization_id.map_or_else(String::new, |id| id.value),
+            organization_id: proto
+                .organization_id
+                .map_or_else(String::new, |id| id.value),
             organization_name: proto.organization_name,
             role,
             joined_at: proto.joined_at.map(|ts| {
-                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-                    .unwrap_or_default()
+                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32).unwrap_or_default()
             }),
         }
     }
@@ -896,18 +928,18 @@ impl Invitation {
         Self {
             id: proto.id.map_or_else(String::new, |id| id.value),
             email: proto.email,
-            organization_id: proto.organization_id.map_or_else(String::new, |id| id.value),
+            organization_id: proto
+                .organization_id
+                .map_or_else(String::new, |id| id.value),
             organization_name: proto.organization_name,
             role,
             invited_by: UserId::parse(&proto.invited_by.map_or_else(String::new, |id| id.value))
                 .unwrap_or_default(),
             created_at: proto.created_at.map(|ts| {
-                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-                    .unwrap_or_default()
+                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32).unwrap_or_default()
             }),
             expires_at: proto.expires_at.map(|ts| {
-                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-                    .unwrap_or_default()
+                chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32).unwrap_or_default()
             }),
             accepted: proto.accepted,
         }

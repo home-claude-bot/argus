@@ -174,7 +174,12 @@ impl RequestTimer {
     /// Record success and return the duration.
     pub fn success(mut self) -> std::time::Duration {
         let duration = self.start.elapsed();
-        record_request(self.service, &self.method, Status::Success, duration.as_secs_f64());
+        record_request(
+            self.service,
+            &self.method,
+            Status::Success,
+            duration.as_secs_f64(),
+        );
         self.recorded = true;
         duration
     }
@@ -182,7 +187,12 @@ impl RequestTimer {
     /// Record an error and return the duration.
     pub fn error(mut self) -> std::time::Duration {
         let duration = self.start.elapsed();
-        record_request(self.service, &self.method, Status::Error, duration.as_secs_f64());
+        record_request(
+            self.service,
+            &self.method,
+            Status::Error,
+            duration.as_secs_f64(),
+        );
         self.recorded = true;
         duration
     }
@@ -190,7 +200,12 @@ impl RequestTimer {
     /// Record a timeout and return the duration.
     pub fn timeout(mut self) -> std::time::Duration {
         let duration = self.start.elapsed();
-        record_request(self.service, &self.method, Status::Timeout, duration.as_secs_f64());
+        record_request(
+            self.service,
+            &self.method,
+            Status::Timeout,
+            duration.as_secs_f64(),
+        );
         self.recorded = true;
         duration
     }
@@ -198,7 +213,12 @@ impl RequestTimer {
     /// Record a cancellation and return the duration.
     pub fn cancelled(mut self) -> std::time::Duration {
         let duration = self.start.elapsed();
-        record_request(self.service, &self.method, Status::Cancelled, duration.as_secs_f64());
+        record_request(
+            self.service,
+            &self.method,
+            Status::Cancelled,
+            duration.as_secs_f64(),
+        );
         self.recorded = true;
         duration
     }
@@ -209,7 +229,12 @@ impl Drop for RequestTimer {
         // If not already recorded, record as cancelled (e.g., panic)
         if !self.recorded {
             let duration = self.start.elapsed();
-            record_request(self.service, &self.method, Status::Cancelled, duration.as_secs_f64());
+            record_request(
+                self.service,
+                &self.method,
+                Status::Cancelled,
+                duration.as_secs_f64(),
+            );
         }
     }
 }

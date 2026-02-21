@@ -124,7 +124,11 @@ impl BillingClient {
             idempotency_key: options.idempotency_key.unwrap_or_default().to_string(),
         };
 
-        let response = self.inner.create_checkout_session(request).await?.into_inner();
+        let response = self
+            .inner
+            .create_checkout_session(request)
+            .await?
+            .into_inner();
 
         Ok(CheckoutSession {
             session_id: response.session_id,
@@ -147,7 +151,11 @@ impl BillingClient {
             return_url: return_url.to_string(),
         };
 
-        let response = self.inner.create_portal_session(request).await?.into_inner();
+        let response = self
+            .inner
+            .create_portal_session(request)
+            .await?
+            .into_inner();
         Ok(response.url)
     }
 
@@ -273,7 +281,11 @@ impl BillingClient {
             payment_method_id: payment_method_id.to_string(),
         };
 
-        let response = self.inner.set_default_payment_method(request).await?.into_inner();
+        let response = self
+            .inner
+            .set_default_payment_method(request)
+            .await?
+            .into_inner();
         Ok(response.success)
     }
 
@@ -292,7 +304,11 @@ impl BillingClient {
             payment_method_id: payment_method_id.to_string(),
         };
 
-        let response = self.inner.delete_payment_method(request).await?.into_inner();
+        let response = self
+            .inner
+            .delete_payment_method(request)
+            .await?
+            .into_inner();
         Ok(response.success)
     }
 
@@ -410,7 +426,11 @@ impl BillingClient {
 
         Ok(UsageSummary {
             period: response.period,
-            metrics: response.metrics.into_iter().map(MetricUsage::from_proto).collect(),
+            metrics: response
+                .metrics
+                .into_iter()
+                .map(MetricUsage::from_proto)
+                .collect(),
             total_requests: response.total_requests,
             limit: response.limit,
             usage_percentage: response.usage_percentage,
@@ -508,7 +528,10 @@ impl Subscription {
                 .unwrap_or_default(),
             tier,
             status,
-            current_period_start: proto.current_period_start.as_ref().map(timestamp_to_datetime),
+            current_period_start: proto
+                .current_period_start
+                .as_ref()
+                .map(timestamp_to_datetime),
             current_period_end: proto.current_period_end.as_ref().map(timestamp_to_datetime),
             cancel_at_period_end,
             created_at: proto.created_at.as_ref().map(timestamp_to_datetime),
@@ -874,6 +897,5 @@ fn invoice_status_to_proto(status: InvoiceStatus) -> i32 {
 }
 
 fn timestamp_to_datetime(ts: &prost_types::Timestamp) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-        .unwrap_or_else(chrono::Utc::now)
+    chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32).unwrap_or_else(chrono::Utc::now)
 }

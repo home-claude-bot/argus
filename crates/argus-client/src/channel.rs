@@ -100,8 +100,9 @@ impl ChannelFactory {
         // Configure TLS if enabled
         if self.config.tls_enabled {
             let tls_config = self.build_tls_config(endpoint_url)?;
-            endpoint = endpoint.tls_config(tls_config)
-                .map_err(|e| ClientError::connection(format!("TLS configuration error: {e}"), false))?;
+            endpoint = endpoint.tls_config(tls_config).map_err(|e| {
+                ClientError::connection(format!("TLS configuration error: {e}"), false)
+            })?;
         }
 
         let channel = endpoint.connect_lazy();
@@ -133,17 +134,18 @@ impl ChannelFactory {
 
             // Add custom CA certificate (check credential source first)
             let ca_pem = if let Some(source) = &custom_tls.ca_cert_source {
-                Some(source.load().map_err(|e| ClientError::connection(
-                    format!("failed to load CA certificate: {e}"),
-                    false,
-                ))?)
+                Some(source.load().map_err(|e| {
+                    ClientError::connection(format!("failed to load CA certificate: {e}"), false)
+                })?)
             } else if let Some(pem) = &custom_tls.ca_cert_pem {
                 Some(pem.clone())
             } else if let Some(path) = &custom_tls.ca_cert_path {
-                Some(std::fs::read(path).map_err(|e| ClientError::connection(
-                    format!("failed to read CA certificate from {}: {e}", path.display()),
-                    false,
-                ))?)
+                Some(std::fs::read(path).map_err(|e| {
+                    ClientError::connection(
+                        format!("failed to read CA certificate from {}: {e}", path.display()),
+                        false,
+                    )
+                })?)
             } else {
                 None
             };
@@ -178,36 +180,39 @@ impl ChannelFactory {
     fn load_client_cert(tls_config: &TlsConfig) -> Result<(Vec<u8>, Vec<u8>), ClientError> {
         // Load certificate (credential source first, then legacy options)
         let cert_pem = if let Some(source) = &tls_config.client_cert_source {
-            source.load().map_err(|e| ClientError::connection(
-                format!("failed to load client certificate: {e}"),
-                false,
-            ))?
+            source.load().map_err(|e| {
+                ClientError::connection(format!("failed to load client certificate: {e}"), false)
+            })?
         } else if let Some(pem) = &tls_config.client_cert_pem {
             pem.clone()
         } else if let Some(path) = &tls_config.client_cert_path {
-            std::fs::read(path)
-                .map_err(|e| ClientError::connection(
-                    format!("failed to read client certificate from {}: {e}", path.display()),
+            std::fs::read(path).map_err(|e| {
+                ClientError::connection(
+                    format!(
+                        "failed to read client certificate from {}: {e}",
+                        path.display()
+                    ),
                     false,
-                ))?
+                )
+            })?
         } else {
             return Err(ClientError::connection("missing client certificate", false));
         };
 
         // Load key (credential source first, then legacy options)
         let key_pem = if let Some(source) = &tls_config.client_key_source {
-            source.load().map_err(|e| ClientError::connection(
-                format!("failed to load client key: {e}"),
-                false,
-            ))?
+            source.load().map_err(|e| {
+                ClientError::connection(format!("failed to load client key: {e}"), false)
+            })?
         } else if let Some(pem) = &tls_config.client_key_pem {
             pem.clone()
         } else if let Some(path) = &tls_config.client_key_path {
-            std::fs::read(path)
-                .map_err(|e| ClientError::connection(
+            std::fs::read(path).map_err(|e| {
+                ClientError::connection(
                     format!("failed to read client key from {}: {e}", path.display()),
                     false,
-                ))?
+                )
+            })?
         } else {
             return Err(ClientError::connection("missing client key", false));
         };
@@ -437,10 +442,7 @@ mod tests {
         drop(client1);
 
         let client2 = shared2.read().await;
-        assert_eq!(
-            client2.config().auth_endpoint(),
-            "http://localhost:50051"
-        );
+        assert_eq!(client2.config().auth_endpoint(), "http://localhost:50051");
     }
 
     #[test]

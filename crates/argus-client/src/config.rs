@@ -191,9 +191,7 @@ impl CredentialSource {
             Self::Env(var) => std::env::var(var)
                 .map(std::string::String::into_bytes)
                 .map_err(|_| {
-                    ConfigError::CredentialLoad(format!(
-                        "environment variable {var} not set"
-                    ))
+                    ConfigError::CredentialLoad(format!("environment variable {var} not set"))
                 }),
             Self::Pem(data) => Ok(data.clone()),
             Self::Vault { path, key } => {
@@ -459,8 +457,7 @@ impl TlsConfig {
 
         // Insecure mode (DANGEROUS)
         if let Ok(insecure) = std::env::var("ARGUS_TLS_INSECURE") {
-            config.accept_invalid_certs = insecure.eq_ignore_ascii_case("true")
-                || insecure == "1";
+            config.accept_invalid_certs = insecure.eq_ignore_ascii_case("true") || insecure == "1";
         }
 
         config
@@ -479,7 +476,10 @@ impl fmt::Debug for ClientConfig {
             .field("retry_attempts", &self.retry_attempts)
             .field("retry_base_delay", &self.retry_base_delay)
             .field("retry_max_delay", &self.retry_max_delay)
-            .field("bearer_token", &self.bearer_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "bearer_token",
+                &self.bearer_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("tls_enabled", &self.tls_enabled)
             .field("tls_config", &self.tls_config)
             .finish()
@@ -497,10 +497,7 @@ impl ClientConfig {
     ///
     /// For production use, prefer [`ClientConfig::builder()`].
     #[must_use]
-    pub fn new(
-        auth_endpoint: impl Into<String>,
-        billing_endpoint: impl Into<String>,
-    ) -> Self {
+    pub fn new(auth_endpoint: impl Into<String>, billing_endpoint: impl Into<String>) -> Self {
         Self {
             auth_endpoint: auth_endpoint.into(),
             billing_endpoint: billing_endpoint.into(),
@@ -685,16 +682,19 @@ impl ClientConfigBuilder {
     ///
     /// Returns an error if required endpoints are not set.
     pub fn build(self) -> Result<ClientConfig, ConfigError> {
-        let auth_endpoint = self.auth_endpoint
+        let auth_endpoint = self
+            .auth_endpoint
             .ok_or(ConfigError::MissingEndpoint("auth"))?;
-        let billing_endpoint = self.billing_endpoint
+        let billing_endpoint = self
+            .billing_endpoint
             .ok_or(ConfigError::MissingEndpoint("billing"))?;
-        let identity_endpoint = self.identity_endpoint
+        let identity_endpoint = self
+            .identity_endpoint
             .unwrap_or_else(|| auth_endpoint.clone());
 
-        let tls_enabled = self.tls_enabled.unwrap_or_else(|| {
-            auth_endpoint.starts_with("https://")
-        });
+        let tls_enabled = self
+            .tls_enabled
+            .unwrap_or_else(|| auth_endpoint.starts_with("https://"));
 
         Ok(ClientConfig {
             auth_endpoint,
@@ -818,7 +818,9 @@ mod tests {
         let result = source.load();
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Vault integration not yet implemented"));
+        assert!(err
+            .to_string()
+            .contains("Vault integration not yet implemented"));
     }
 
     #[test]

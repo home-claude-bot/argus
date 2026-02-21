@@ -107,7 +107,11 @@ impl AuthClient {
             required_scopes: required_scopes.iter().map(|s| (*s).to_string()).collect(),
         };
 
-        let response = self.inner.batch_validate_tokens(request).await?.into_inner();
+        let response = self
+            .inner
+            .batch_validate_tokens(request)
+            .await?
+            .into_inner();
 
         let results = response
             .results
@@ -319,7 +323,11 @@ impl AuthClient {
             features: features.iter().map(|s| (*s).to_string()).collect(),
         };
 
-        let response = self.inner.batch_check_entitlements(request).await?.into_inner();
+        let response = self
+            .inner
+            .batch_check_entitlements(request)
+            .await?
+            .into_inner();
 
         // Extract tier before consuming results
         let tier = tier_from_proto(response.tier());
@@ -343,10 +351,7 @@ impl AuthClient {
             })
             .collect();
 
-        Ok(BatchEntitlementResult {
-            results,
-            tier,
-        })
+        Ok(BatchEntitlementResult { results, tier })
     }
 
     /// Get a user's tier.
@@ -670,6 +675,5 @@ fn tier_from_proto(tier: argus_proto::Tier) -> Tier {
 }
 
 fn timestamp_to_datetime(ts: &prost_types::Timestamp) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-        .unwrap_or_else(chrono::Utc::now)
+    chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32).unwrap_or_else(chrono::Utc::now)
 }
