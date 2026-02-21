@@ -38,18 +38,21 @@ pub mod config;
 pub mod error;
 pub mod identity;
 pub mod interceptor;
+pub mod metrics;
+pub mod retry;
 
 // Re-export primary types
 pub use auth::AuthClient;
-pub use billing::BillingClient;
-pub use channel::ChannelFactory;
-pub use config::{ClientConfig, ClientConfigBuilder, ConfigError};
+pub use billing::{BillingClient, CheckoutOptions};
+pub use channel::{ArgusClient, ChannelFactory, SharedArgusClient};
+pub use config::{ClientConfig, ClientConfigBuilder, ConfigError, CredentialSource, TlsConfig};
 pub use error::ClientError;
 pub use identity::{
     ApiKey, IdentityClient, Invitation, Organization, OrganizationMember, OrganizationMembership,
     OrganizationRole, User,
 };
 pub use interceptor::{AuthInterceptor, CombinedInterceptor, RequestIdInterceptor};
+pub use retry::{with_retry, RetryConfig, RetryPolicy, RetryableError};
 
 /// Result type for client operations.
 pub type Result<T> = std::result::Result<T, ClientError>;

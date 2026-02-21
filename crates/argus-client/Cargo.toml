@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 argus-types = { path = "../argus-types" }
 argus-proto = { path = "../argus-proto" }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["tls"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -22,6 +22,10 @@ tower = { workspace = true }
 prost-types = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+metrics = "0.24"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+tonic = { workspace = true, features = ["tls"] }
+async-trait = { workspace = true }
+tempfile = "3.19"

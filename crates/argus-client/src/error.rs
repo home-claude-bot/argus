@@ -92,28 +92,33 @@ pub enum ClientError {
 
 impl ClientError {
     /// Returns true if this error is retryable.
+    ///
+    /// Retryable errors are transient failures that may succeed on retry:
+    /// - Timeouts, service unavailable, rate limits, concurrency conflicts
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Connection { retryable, .. } => *retryable,
-            Self::Timeout(_) => true,
-            Self::Unavailable(_) => true,
-            Self::ResourceExhausted(_) => true, // Rate limits are typically retryable with backoff
-            Self::Aborted(_) => true, // Concurrency conflicts can be retried
-            Self::Internal(_) => false, // Internal errors might be permanent
-            Self::Unauthenticated(_) => false, // Need new credentials
-            Self::PermissionDenied(_) => false, // Permissions won't change
-            Self::NotFound(_) => false,
-            Self::InvalidArgument(_) => false,
-            Self::AlreadyExists(_) => false,
-            Self::FailedPrecondition(_) => false,
-            Self::OutOfRange(_) => false,
-            Self::Unimplemented(_) => false,
-            Self::DataLoss(_) => false,
-            Self::Cancelled(_) => false,
-            Self::Unknown(_) => false,
-            Self::Config(_) => false,
-            Self::Serialization(_) => false,
+            // Transient errors - retry with backoff
+            Self::Timeout(_)
+            | Self::Unavailable(_)
+            | Self::ResourceExhausted(_)
+            | Self::Aborted(_) => true,
+            // Permanent errors - do not retry
+            Self::Internal(_)
+            | Self::Unauthenticated(_)
+            | Self::PermissionDenied(_)
+            | Self::NotFound(_)
+            | Self::InvalidArgument(_)
+            | Self::AlreadyExists(_)
+            | Self::FailedPrecondition(_)
+            | Self::OutOfRange(_)
+            | Self::Unimplemented(_)
+            | Self::DataLoss(_)
+            | Self::Cancelled(_)
+            | Self::Unknown(_)
+            | Self::Config(_)
+            | Self::Serialization(_) => false,
         }
     }
 

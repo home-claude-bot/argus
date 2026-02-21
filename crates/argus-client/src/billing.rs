@@ -89,15 +89,26 @@ impl BillingClient {
     }
 
     /// Create a checkout session for subscription.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let session = client.create_checkout_session(
+    ///     &user_id,
+    ///     "price_xxx",
+    ///     "https://example.com/success",
+    ///     "https://example.com/cancel",
+    ///     CheckoutOptions::new().with_trial_days(14),
+    /// ).await?;
+    /// ```
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_checkout_session(
         &mut self,
         user_id: &UserId,
         price_id: &str,
         success_url: &str,
         cancel_url: &str,
-        trial_days: Option<i32>,
-        promotion_code: Option<&str>,
-        idempotency_key: Option<&str>,
+        options: CheckoutOptions<'_>,
     ) -> Result<CheckoutSession> {
         use argus_proto::{CreateCheckoutSessionRequest, UserId as ProtoUserId};
 
@@ -108,9 +119,9 @@ impl BillingClient {
             price_id: price_id.to_string(),
             success_url: success_url.to_string(),
             cancel_url: cancel_url.to_string(),
-            trial_days: trial_days.unwrap_or(0),
-            promotion_code: promotion_code.unwrap_or_default().to_string(),
-            idempotency_key: idempotency_key.unwrap_or_default().to_string(),
+            trial_days: options.trial_days.unwrap_or(0),
+            promotion_code: options.promotion_code.unwrap_or_default().to_string(),
+            idempotency_key: options.idempotency_key.unwrap_or_default().to_string(),
         };
 
         let response = self.inner.create_checkout_session(request).await?.into_inner();
@@ -424,6 +435,46 @@ impl BillingClient {
 // Domain Types
 // =============================================================================
 
+/// Options for creating a checkout session.
+#[derive(Debug, Clone, Default)]
+pub struct CheckoutOptions<'a> {
+    /// Number of trial days (0 for no trial)
+    pub trial_days: Option<i32>,
+    /// Promotion code to apply
+    pub promotion_code: Option<&'a str>,
+    /// Idempotency key for safe retries
+    pub idempotency_key: Option<&'a str>,
+}
+
+impl<'a> CheckoutOptions<'a> {
+    /// Create new checkout options with defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the number of trial days.
+    #[must_use]
+    pub fn with_trial_days(mut self, days: i32) -> Self {
+        self.trial_days = Some(days);
+        self
+    }
+
+    /// Set a promotion code.
+    #[must_use]
+    pub fn with_promotion_code(mut self, code: &'a str) -> Self {
+        self.promotion_code = Some(code);
+        self
+    }
+
+    /// Set an idempotency key for safe retries.
+    #[must_use]
+    pub fn with_idempotency_key(mut self, key: &'a str) -> Self {
+        self.idempotency_key = Some(key);
+        self
+    }
+}
+
 /// Subscription information.
 #[derive(Debug, Clone)]
 pub struct Subscription {
@@ -457,10 +508,10 @@ impl Subscription {
                 .unwrap_or_default(),
             tier,
             status,
-            current_period_start: proto.current_period_start.map(timestamp_to_datetime),
-            current_period_end: proto.current_period_end.map(timestamp_to_datetime),
+            current_period_start: proto.current_period_start.as_ref().map(timestamp_to_datetime),
+            current_period_end: proto.current_period_end.as_ref().map(timestamp_to_datetime),
             cancel_at_period_end,
-            created_at: proto.created_at.map(timestamp_to_datetime),
+            created_at: proto.created_at.as_ref().map(timestamp_to_datetime),
         }
     }
 }
@@ -581,7 +632,7 @@ impl PaymentMethod {
             method_type,
             is_default,
             card: proto.card.map(CardDetails::from_proto),
-            created_at: proto.created_at.map(timestamp_to_datetime),
+            created_at: proto.created_at.as_ref().map(timestamp_to_datetime),
         }
     }
 }
@@ -687,10 +738,10 @@ impl Invoice {
             amount_paid_cents: proto.amount_paid_cents,
             currency: proto.currency,
             description: proto.description,
-            period_start: proto.period_start.map(timestamp_to_datetime),
-            period_end: proto.period_end.map(timestamp_to_datetime),
-            created_at: proto.created_at.map(timestamp_to_datetime),
-            paid_at: proto.paid_at.map(timestamp_to_datetime),
+            period_start: proto.period_start.as_ref().map(timestamp_to_datetime),
+            period_end: proto.period_end.as_ref().map(timestamp_to_datetime),
+            created_at: proto.created_at.as_ref().map(timestamp_to_datetime),
+            paid_at: proto.paid_at.as_ref().map(timestamp_to_datetime),
             hosted_invoice_url: if proto.hosted_invoice_url.is_empty() {
                 None
             } else {
@@ -822,7 +873,7 @@ fn invoice_status_to_proto(status: InvoiceStatus) -> i32 {
     }
 }
 
-fn timestamp_to_datetime(ts: prost_types::Timestamp) -> chrono::DateTime<chrono::Utc> {
+fn timestamp_to_datetime(ts: &prost_types::Timestamp) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
         .unwrap_or_else(chrono::Utc::now)
 }

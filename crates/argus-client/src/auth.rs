@@ -159,7 +159,7 @@ impl AuthClient {
         Ok(SessionInfo {
             session_id: session_id.value,
             session_cookie: response.session_cookie,
-            expires_at: response.expires_at.map(timestamp_to_datetime),
+            expires_at: response.expires_at.as_ref().map(timestamp_to_datetime),
         })
     }
 
@@ -364,7 +364,7 @@ impl AuthClient {
         Ok(UserTierInfo {
             tier: tier_from_proto(response.tier()),
             features: response.features,
-            rate_limit: response.rate_limit.map(RateLimit::from_proto),
+            rate_limit: response.rate_limit.as_ref().map(RateLimit::from_proto),
         })
     }
 
@@ -381,8 +381,8 @@ impl AuthClient {
         let response = self.inner.get_rate_limit(request).await?.into_inner();
 
         Ok(RateLimitInfo {
-            rate_limit: response.rate_limit.map(RateLimit::from_proto),
-            status: response.status.map(RateLimitStatus::from_proto),
+            rate_limit: response.rate_limit.as_ref().map(RateLimit::from_proto),
+            status: response.status.as_ref().map(RateLimitStatus::from_proto),
         })
     }
 
@@ -538,9 +538,9 @@ impl Session {
     fn from_proto(proto: argus_proto::SessionInfo) -> Self {
         Self {
             session_id: proto.session_id.map_or_else(String::new, |id| id.value),
-            created_at: proto.created_at.map(timestamp_to_datetime),
-            expires_at: proto.expires_at.map(timestamp_to_datetime),
-            last_active_at: proto.last_active_at.map(timestamp_to_datetime),
+            created_at: proto.created_at.as_ref().map(timestamp_to_datetime),
+            expires_at: proto.expires_at.as_ref().map(timestamp_to_datetime),
+            last_active_at: proto.last_active_at.as_ref().map(timestamp_to_datetime),
             ip_address: proto.ip_address,
             user_agent: proto.user_agent,
             is_current: proto.is_current,
@@ -605,7 +605,7 @@ pub struct RateLimit {
 }
 
 impl RateLimit {
-    fn from_proto(proto: argus_proto::RateLimit) -> Self {
+    fn from_proto(proto: &argus_proto::RateLimit) -> Self {
         Self {
             requests: proto.requests,
             window_seconds: proto.window_seconds,
@@ -625,7 +625,7 @@ pub struct RateLimitStatus {
 }
 
 impl RateLimitStatus {
-    fn from_proto(proto: argus_proto::RateLimitStatus) -> Self {
+    fn from_proto(proto: &argus_proto::RateLimitStatus) -> Self {
         Self {
             limit: proto.limit,
             remaining: proto.remaining,
@@ -669,7 +669,7 @@ fn tier_from_proto(tier: argus_proto::Tier) -> Tier {
     }
 }
 
-fn timestamp_to_datetime(ts: prost_types::Timestamp) -> chrono::DateTime<chrono::Utc> {
+fn timestamp_to_datetime(ts: &prost_types::Timestamp) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
         .unwrap_or_else(chrono::Utc::now)
 }
