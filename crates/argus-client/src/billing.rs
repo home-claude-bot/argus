@@ -405,6 +405,71 @@ impl BillingClient {
         })
     }
 
+    /// Record multiple usage events in batch.
+    ///
+    /// More efficient than calling `record_usage` multiple times when
+    /// recording many events, as it reduces RPC overhead.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use argus_client::{BillingClient, UsageEvent};
+    ///
+    /// let events = vec![
+    ///     UsageEvent::new(user1, "predictions", 5),
+    ///     UsageEvent::new(user2, "predictions", 3),
+    ///     UsageEvent::new(user1, "api_calls", 10),
+    /// ];
+    ///
+    /// let result = client.batch_record_usage(events).await?;
+    /// println!("Recorded {} events successfully", result.successful);
+    /// ```
+    #[instrument(skip(self, events), fields(event_count = events.len()), level = "debug")]
+    pub async fn batch_record_usage(
+        &mut self,
+        events: Vec<UsageEvent>,
+    ) -> Result<BatchUsageResult> {
+        use argus_proto::{BatchRecordUsageRequest, UsageEventProto, UserId as ProtoUserId};
+
+        let proto_events: Vec<UsageEventProto> = events
+            .iter()
+            .map(|e| UsageEventProto {
+                user_id: Some(ProtoUserId {
+                    value: e.user_id.to_string(),
+                }),
+                metric: e.metric.clone(),
+                count: e.count,
+                timestamp: None,
+                metadata: e.metadata.clone().unwrap_or_default(),
+            })
+            .collect();
+
+        let request = BatchRecordUsageRequest {
+            events: proto_events,
+        };
+
+        let response = self.inner.batch_record_usage(request).await?.into_inner();
+
+        let results: Vec<UsageRecordResult> = response
+            .results
+            .into_iter()
+            .map(|r| UsageRecordResult {
+                success: r.success,
+                current_period_usage: r.current_period_usage,
+                period_limit: r.period_limit,
+            })
+            .collect();
+
+        let successful = results.iter().filter(|r| r.success).count();
+        let failed = results.len() - successful;
+
+        Ok(BatchUsageResult {
+            successful,
+            failed,
+            results,
+        })
+    }
+
     /// Get usage summary for a period.
     pub async fn get_usage_summary(
         &mut self,
@@ -860,6 +925,61 @@ pub struct UsageRecordResult {
     pub current_period_usage: u64,
     /// Period limit (if applicable)
     pub period_limit: u64,
+}
+
+/// Usage event for batch recording.
+///
+/// Represents a single usage event that can be batched with others
+/// for more efficient throughput when recording many events.
+#[derive(Debug, Clone)]
+pub struct UsageEvent {
+    /// User ID
+    pub user_id: UserId,
+    /// Metric name (e.g., `predictions`, `api_calls`, `tokens`)
+    pub metric: String,
+    /// Usage count
+    pub count: u64,
+    /// Optional metadata for additional context
+    pub metadata: Option<std::collections::HashMap<String, String>>,
+}
+
+impl UsageEvent {
+    /// Create a new usage event.
+    pub fn new(user_id: UserId, metric: impl Into<String>, count: u64) -> Self {
+        Self {
+            user_id,
+            metric: metric.into(),
+            count,
+            metadata: None,
+        }
+    }
+
+    /// Add metadata to the event.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: std::collections::HashMap<String, String>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Add a single metadata key-value pair.
+    #[must_use]
+    pub fn with_metadata_entry(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(key.into(), value.into());
+        self
+    }
+}
+
+/// Result of batch usage recording.
+#[derive(Debug, Clone)]
+pub struct BatchUsageResult {
+    /// Number of events successfully recorded
+    pub successful: usize,
+    /// Number of events that failed
+    pub failed: usize,
+    /// Individual results (in order of input events)
+    pub results: Vec<UsageRecordResult>,
 }
 
 /// Usage summary.

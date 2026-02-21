@@ -78,6 +78,10 @@ service BillingService {
   // Record API usage
   rpc RecordUsage(RecordUsageRequest) returns (RecordUsageResponse);
 
+  // Record multiple usage events in batch
+  // More efficient than multiple RecordUsage calls for high-throughput scenarios
+  rpc BatchRecordUsage(BatchRecordUsageRequest) returns (BatchRecordUsageResponse);
+
   // Get usage summary for a period
   rpc GetUsageSummary(GetUsageSummaryRequest) returns (GetUsageSummaryResponse);
 
@@ -540,6 +544,34 @@ message RecordUsageResponse {
 
   // Period limit (if applicable)
   uint64 period_limit = 3;
+}
+
+// Usage event for batch recording
+message UsageEventProto {
+  // User ID
+  UserId user_id = 1;
+
+  // Metric name (e.g., "api_requests", "predictions", "tokens")
+  string metric = 2;
+
+  // Usage count
+  uint64 count = 3;
+
+  // Timestamp (defaults to now if not specified)
+  google.protobuf.Timestamp timestamp = 4;
+
+  // Additional metadata
+  map<string, string> metadata = 5;
+}
+
+message BatchRecordUsageRequest {
+  // List of usage events to record
+  repeated UsageEventProto events = 1;
+}
+
+message BatchRecordUsageResponse {
+  // Results for each event (in order of input)
+  repeated RecordUsageResponse results = 1;
 }
 
 message GetUsageSummaryRequest {
