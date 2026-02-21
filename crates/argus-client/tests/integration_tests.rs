@@ -522,3 +522,90 @@ fn test_llm_usage_event_total_tokens_overflow() {
     let event = LlmUsageEvent::new(user_id, "anthropic", "claude-3", u32::MAX, 100);
     assert_eq!(event.total_tokens(), u32::MAX); // Saturates, doesn't overflow
 }
+
+// =============================================================================
+// Usage Event and Batch Recording Tests
+// =============================================================================
+
+#[test]
+fn test_usage_event_builder() {
+    use argus_client::UsageEvent;
+    use argus_types::UserId;
+
+    let user_id = UserId::parse("550e8400-e29b-41d4-a716-446655440001").unwrap();
+    let event = UsageEvent::new(user_id.clone(), "api_calls", 10);
+
+    assert_eq!(event.user_id, user_id);
+    assert_eq!(event.metric, "api_calls");
+    assert_eq!(event.count, 10);
+    assert!(event.metadata.is_none());
+}
+
+#[test]
+fn test_usage_event_with_metadata() {
+    use argus_client::UsageEvent;
+    use argus_types::UserId;
+
+    let user_id = UserId::parse("550e8400-e29b-41d4-a716-446655440002").unwrap();
+    let event = UsageEvent::new(user_id, "predictions", 5)
+        .with_metadata_entry("model", "gpt-4")
+        .with_metadata_entry("provider", "openai");
+
+    let metadata = event.metadata.as_ref().unwrap();
+    assert_eq!(metadata.get("model"), Some(&"gpt-4".to_string()));
+    assert_eq!(metadata.get("provider"), Some(&"openai".to_string()));
+}
+
+#[test]
+fn test_usage_event_with_full_metadata() {
+    use argus_client::UsageEvent;
+    use argus_types::UserId;
+    use std::collections::HashMap;
+
+    let user_id = UserId::parse("550e8400-e29b-41d4-a716-446655440003").unwrap();
+    let mut metadata = HashMap::new();
+    metadata.insert("region".to_string(), "us-west-2".to_string());
+    metadata.insert("service".to_string(), "prism".to_string());
+
+    let event = UsageEvent::new(user_id, "tokens", 1500).with_metadata(metadata);
+
+    let meta = event.metadata.as_ref().unwrap();
+    assert_eq!(meta.len(), 2);
+    assert_eq!(meta.get("region"), Some(&"us-west-2".to_string()));
+}
+
+#[test]
+fn test_batch_usage_result_counting() {
+    use argus_client::billing::{BatchUsageResult, UsageRecordResult};
+
+    let results = vec![
+        UsageRecordResult {
+            success: true,
+            current_period_usage: 100,
+            period_limit: 1000,
+        },
+        UsageRecordResult {
+            success: false,
+            current_period_usage: 0,
+            period_limit: 0,
+        },
+        UsageRecordResult {
+            success: true,
+            current_period_usage: 200,
+            period_limit: 1000,
+        },
+    ];
+
+    let successful = results.iter().filter(|r| r.success).count();
+    let failed = results.len() - successful;
+
+    let batch_result = BatchUsageResult {
+        successful,
+        failed,
+        results,
+    };
+
+    assert_eq!(batch_result.successful, 2);
+    assert_eq!(batch_result.failed, 1);
+    assert_eq!(batch_result.results.len(), 3);
+}
