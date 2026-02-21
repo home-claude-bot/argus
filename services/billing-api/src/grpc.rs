@@ -10,17 +10,18 @@
 use argus_billing_core::BillingService;
 use argus_proto::billing_service::billing_service_server::BillingService as BillingServiceTrait;
 use argus_proto::{
-    BillingInterval, CancelSubscriptionRequest, CancelSubscriptionResponse, ChangePlanRequest,
-    ChangePlanResponse, CreateCheckoutSessionRequest, CreateCheckoutSessionResponse,
-    CreatePortalSessionRequest, CreatePortalSessionResponse, GetInvoiceRequest, GetInvoiceResponse,
-    GetSubscriptionRequest, GetSubscriptionResponse, GetUpcomingInvoiceRequest,
-    GetUpcomingInvoiceResponse, GetUsageSummaryRequest, GetUsageSummaryResponse,
-    HandleWebhookRequest, HandleWebhookResponse, HealthCheckRequest, HealthCheckResponse,
-    Invoice as ProtoInvoice, InvoiceStatus as ProtoInvoiceStatus, ListInvoicesRequest,
-    ListInvoicesResponse, ListPaymentMethodsRequest, ListPaymentMethodsResponse, ListPlansRequest,
-    ListPlansResponse, MetricUsage, Plan, RecordUsageRequest, RecordUsageResponse,
-    ResumeSubscriptionRequest, ResumeSubscriptionResponse, SetDefaultPaymentMethodRequest,
-    SetDefaultPaymentMethodResponse, StreamUsageRequest, Subscription as ProtoSubscription,
+    BatchRecordUsageRequest, BatchRecordUsageResponse, BillingInterval, CancelSubscriptionRequest,
+    CancelSubscriptionResponse, ChangePlanRequest, ChangePlanResponse,
+    CreateCheckoutSessionRequest, CreateCheckoutSessionResponse, CreatePortalSessionRequest,
+    CreatePortalSessionResponse, GetInvoiceRequest, GetInvoiceResponse, GetSubscriptionRequest,
+    GetSubscriptionResponse, GetUpcomingInvoiceRequest, GetUpcomingInvoiceResponse,
+    GetUsageSummaryRequest, GetUsageSummaryResponse, HandleWebhookRequest, HandleWebhookResponse,
+    HealthCheckRequest, HealthCheckResponse, Invoice as ProtoInvoice,
+    InvoiceStatus as ProtoInvoiceStatus, ListInvoicesRequest, ListInvoicesResponse,
+    ListPaymentMethodsRequest, ListPaymentMethodsResponse, ListPlansRequest, ListPlansResponse,
+    MetricUsage, Plan, RecordUsageRequest, RecordUsageResponse, ResumeSubscriptionRequest,
+    ResumeSubscriptionResponse, SetDefaultPaymentMethodRequest, SetDefaultPaymentMethodResponse,
+    StreamUsageRequest, Subscription as ProtoSubscription,
     SubscriptionStatus as ProtoSubscriptionStatus, Tier as ProtoTier, UsageEvent,
     UserId as ProtoUserId,
 };
@@ -596,6 +597,74 @@ impl BillingServiceTrait for GrpcBillingService {
             current_period_usage: result.total_usage as u64,
             period_limit: 0,
         }))
+    }
+
+    /// Batch record usage - processes multiple usage events in a single request.
+    /// Hot path optimized for high throughput usage tracking.
+    #[instrument(skip(self, request), fields(event_count))]
+    async fn batch_record_usage(
+        &self,
+        request: Request<BatchRecordUsageRequest>,
+    ) -> Result<Response<BatchRecordUsageResponse>, Status> {
+        let start = Instant::now();
+        let req = request.into_inner();
+        let events = req.events;
+
+        tracing::Span::current().record("event_count", events.len());
+
+        let mut results = Vec::with_capacity(events.len());
+
+        for event in events {
+            let user_id = proto_to_user_id(event.user_id)?;
+            let metric = event.metric;
+
+            // Input validation
+            validate_metric_name(&metric)?;
+            if event.count == 0 {
+                results.push(RecordUsageResponse {
+                    success: false,
+                    current_period_usage: 0,
+                    period_limit: 0,
+                });
+                continue;
+            }
+
+            #[allow(clippy::cast_possible_wrap)]
+            let count_i64 = event.count as i64;
+
+            match self
+                .billing
+                .record_usage(&user_id, &metric, count_i64)
+                .await
+            {
+                Ok(result) => {
+                    metrics::counter!("billing_usage_recorded_total", "metric" => metric.clone())
+                        .increment(event.count);
+                    results.push(RecordUsageResponse {
+                        success: result.success,
+                        current_period_usage: result.total_usage as u64,
+                        period_limit: 0,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        metric = %metric,
+                        error = %e,
+                        "Failed to record usage in batch"
+                    );
+                    results.push(RecordUsageResponse {
+                        success: false,
+                        current_period_usage: 0,
+                        period_limit: 0,
+                    });
+                }
+            }
+        }
+
+        record_grpc_duration("batch_record_usage", start, true);
+
+        Ok(Response::new(BatchRecordUsageResponse { results }))
     }
 
     #[instrument(skip(self, request), fields(user_id, period))]

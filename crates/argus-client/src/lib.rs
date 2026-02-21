@@ -54,6 +54,8 @@ pub use identity::{
     OrganizationRole, User,
 };
 pub use interceptor::{AuthInterceptor, CombinedInterceptor, RequestIdInterceptor};
+#[cfg(feature = "prometheus")]
+pub use metrics::{MetricsHandle, MetricsInstallError};
 pub use retry::{with_retry, RetryConfig, RetryPolicy, RetryableError};
 
 /// Result type for client operations.
