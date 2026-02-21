@@ -449,6 +449,78 @@ impl BillingClient {
 
         Ok(response.status() == argus_proto::health_check_response::ServingStatus::Serving)
     }
+
+    // =========================================================================
+    // LLM Usage Tracking (Prism integration)
+    // =========================================================================
+
+    /// Record LLM API usage with provider and model dimensions.
+    ///
+    /// This is a convenience method for Prism and other LLM gateways that need
+    /// to track usage by provider, model, and token counts.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let event = LlmUsageEvent {
+    ///     user_id: user_id.clone(),
+    ///     provider: "openai".to_string(),
+    ///     model: "gpt-4o".to_string(),
+    ///     input_tokens: 150,
+    ///     output_tokens: 500,
+    ///     latency_ms: 1200,
+    ///     cost_usd: 0.0065,
+    ///     request_id: Some("req_abc123".to_string()),
+    /// };
+    ///
+    /// client.record_llm_usage(event).await?;
+    /// ```
+    #[instrument(skip(self), level = "debug")]
+    pub async fn record_llm_usage(&mut self, event: LlmUsageEvent) -> Result<UsageRecordResult> {
+        use std::collections::HashMap;
+
+        // Build metadata with LLM-specific dimensions
+        let mut metadata = HashMap::new();
+        metadata.insert("provider".to_string(), event.provider.clone());
+        metadata.insert("model".to_string(), event.model.clone());
+        metadata.insert("input_tokens".to_string(), event.input_tokens.to_string());
+        metadata.insert("output_tokens".to_string(), event.output_tokens.to_string());
+        metadata.insert("latency_ms".to_string(), event.latency_ms.to_string());
+        metadata.insert("cost_usd".to_string(), format!("{:.6}", event.cost_usd));
+
+        if let Some(ref request_id) = event.request_id {
+            metadata.insert("request_id".to_string(), request_id.clone());
+        }
+
+        // Calculate total tokens for the count
+        let total_tokens = event.input_tokens.saturating_add(event.output_tokens) as u64;
+
+        // Record as "llm_tokens" metric with full context in metadata
+        self.record_usage(&event.user_id, "llm_tokens", total_tokens, Some(metadata))
+            .await
+    }
+
+    /// Record multiple LLM usage events in a batch.
+    ///
+    /// This is more efficient than calling `record_llm_usage` multiple times,
+    /// as it batches the requests together.
+    ///
+    /// Note: Currently implemented as sequential calls. A future version may
+    /// use a batch RPC endpoint for better performance.
+    #[instrument(skip(self, events), level = "debug", fields(event_count = events.len()))]
+    pub async fn batch_record_llm_usage(
+        &mut self,
+        events: Vec<LlmUsageEvent>,
+    ) -> Result<Vec<UsageRecordResult>> {
+        let mut results = Vec::with_capacity(events.len());
+
+        for event in events {
+            let result = self.record_llm_usage(event).await?;
+            results.push(result);
+        }
+
+        Ok(results)
+    }
 }
 
 // =============================================================================
@@ -820,6 +892,84 @@ impl MetricUsage {
             metric: proto.metric,
             count: proto.count,
         }
+    }
+}
+
+// =============================================================================
+// LLM Usage Types (Prism integration)
+// =============================================================================
+
+/// LLM usage event for tracking API calls to language models.
+///
+/// Used by Prism and other LLM gateways to record usage by provider,
+/// model, and token counts for billing and analytics.
+#[derive(Debug, Clone)]
+pub struct LlmUsageEvent {
+    /// User ID making the request
+    pub user_id: UserId,
+    /// LLM provider (e.g., "openai", "anthropic", "google")
+    pub provider: String,
+    /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet", "gemini-pro")
+    pub model: String,
+    /// Number of input tokens (prompt)
+    pub input_tokens: u32,
+    /// Number of output tokens (completion)
+    pub output_tokens: u32,
+    /// Request latency in milliseconds
+    pub latency_ms: u64,
+    /// Estimated cost in USD (pre-calculated using price tables)
+    pub cost_usd: f64,
+    /// Optional request ID for correlation
+    pub request_id: Option<String>,
+}
+
+impl LlmUsageEvent {
+    /// Create a new LLM usage event.
+    #[must_use]
+    pub fn new(
+        user_id: UserId,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        input_tokens: u32,
+        output_tokens: u32,
+    ) -> Self {
+        Self {
+            user_id,
+            provider: provider.into(),
+            model: model.into(),
+            input_tokens,
+            output_tokens,
+            latency_ms: 0,
+            cost_usd: 0.0,
+            request_id: None,
+        }
+    }
+
+    /// Set the request latency.
+    #[must_use]
+    pub fn with_latency(mut self, latency_ms: u64) -> Self {
+        self.latency_ms = latency_ms;
+        self
+    }
+
+    /// Set the estimated cost.
+    #[must_use]
+    pub fn with_cost(mut self, cost_usd: f64) -> Self {
+        self.cost_usd = cost_usd;
+        self
+    }
+
+    /// Set the request ID for correlation.
+    #[must_use]
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        self
+    }
+
+    /// Calculate total tokens (input + output).
+    #[must_use]
+    pub fn total_tokens(&self) -> u32 {
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 }
 

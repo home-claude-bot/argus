@@ -7,8 +7,10 @@
 use std::time::Duration;
 
 use argus_client::{
-    with_retry, ClientConfig, ClientError, CredentialSource, RetryConfig, RetryableError, TlsConfig,
+    with_retry, ClientConfig, ClientError, CredentialSource, LlmUsageEvent, RetryConfig,
+    RetryableError, TlsConfig,
 };
+use argus_types::{LlmEntitlements, LlmModelTier, Tier, UserId};
 
 // =============================================================================
 // Configuration Integration Tests
@@ -426,4 +428,97 @@ async fn test_shared_client() {
 
     let client2 = shared2.read().await;
     assert_eq!(client2.config().auth_endpoint(), "http://localhost:50051");
+}
+
+// =============================================================================
+// LLM Entitlements Tests
+// =============================================================================
+
+#[test]
+fn test_llm_entitlements_for_tier() {
+    // Explorer tier - limited access
+    let explorer = LlmEntitlements::for_tier(Tier::Explorer);
+    assert_eq!(explorer.allowed_model_tiers, vec![LlmModelTier::Economy]);
+    assert_eq!(explorer.daily_token_budget, 10_000);
+    assert_eq!(explorer.requests_per_minute, 10);
+    assert!(!explorer.streaming_allowed);
+
+    // Professional tier - balanced + economy
+    let pro = LlmEntitlements::for_tier(Tier::Professional);
+    assert!(pro.is_model_tier_allowed(LlmModelTier::Economy));
+    assert!(pro.is_model_tier_allowed(LlmModelTier::Balanced));
+    assert!(!pro.is_model_tier_allowed(LlmModelTier::Reasoning));
+    assert_eq!(pro.daily_token_budget, 100_000);
+    assert!(pro.streaming_allowed);
+
+    // Enterprise tier - all access
+    let enterprise = LlmEntitlements::for_tier(Tier::Enterprise);
+    assert!(enterprise.is_model_tier_allowed(LlmModelTier::Reasoning));
+    assert_eq!(enterprise.daily_token_budget, 1_000_000);
+    assert!(enterprise.max_tokens_per_request.is_none()); // Unlimited
+}
+
+#[test]
+fn test_llm_entitlements_budget_checking() {
+    let entitlements = LlmEntitlements::for_tier(Tier::Explorer);
+
+    // Check budget tracking
+    assert!(!entitlements.would_exceed_budget(5_000, 4_000)); // 9k < 10k
+    assert!(entitlements.would_exceed_budget(5_000, 6_000)); // 11k > 10k
+    assert_eq!(entitlements.remaining_budget(3_000), 7_000);
+    assert_eq!(entitlements.remaining_budget(15_000), 0); // Capped at 0
+}
+
+#[test]
+fn test_llm_model_tier_parsing() {
+    assert_eq!(
+        "economy".parse::<LlmModelTier>().unwrap(),
+        LlmModelTier::Economy
+    );
+    assert_eq!(
+        "balanced".parse::<LlmModelTier>().unwrap(),
+        LlmModelTier::Balanced
+    );
+    assert_eq!(
+        "reasoning".parse::<LlmModelTier>().unwrap(),
+        LlmModelTier::Reasoning
+    );
+    assert_eq!(
+        "ECONOMY".parse::<LlmModelTier>().unwrap(),
+        LlmModelTier::Economy
+    );
+    assert!("invalid".parse::<LlmModelTier>().is_err());
+}
+
+// =============================================================================
+// LLM Usage Event Tests
+// =============================================================================
+
+#[test]
+fn test_llm_usage_event_builder() {
+    let user_id = UserId::new();
+
+    let event = LlmUsageEvent::new(user_id.clone(), "openai", "gpt-4o", 100, 500)
+        .with_latency(1500)
+        .with_cost(0.0065)
+        .with_request_id("req_abc123");
+
+    assert_eq!(event.user_id, user_id);
+    assert_eq!(event.provider, "openai");
+    assert_eq!(event.model, "gpt-4o");
+    assert_eq!(event.input_tokens, 100);
+    assert_eq!(event.output_tokens, 500);
+    assert_eq!(event.total_tokens(), 600);
+    assert_eq!(event.latency_ms, 1500);
+    assert_eq!(event.cost_usd, 0.0065);
+    assert_eq!(event.request_id, Some("req_abc123".to_string()));
+}
+
+#[test]
+fn test_llm_usage_event_total_tokens_overflow() {
+    let user_id = UserId::new();
+
+    // Test saturating add for overflow protection
+    let event = LlmUsageEvent::new(user_id, "anthropic", "claude-3", u32::MAX, 100);
+    assert_eq!(event.total_tokens(), u32::MAX); // Saturates, doesn't overflow
 }

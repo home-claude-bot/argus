@@ -43,7 +43,7 @@ pub mod retry;
 
 // Re-export primary types
 pub use auth::AuthClient;
-pub use billing::{BillingClient, CheckoutOptions};
+pub use billing::{BillingClient, CheckoutOptions, LlmUsageEvent};
 pub use channel::{ArgusClient, ChannelFactory, SharedArgusClient};
 pub use config::{ClientConfig, ClientConfigBuilder, ConfigError, CredentialSource, TlsConfig};
 pub use error::ClientError;
