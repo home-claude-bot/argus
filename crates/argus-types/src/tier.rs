@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Subscription tier levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
     /// Free tier - $29/mo, 100 req/min

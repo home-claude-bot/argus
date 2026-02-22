@@ -9,6 +9,7 @@ members = [
     "crates/argus-proto",
     "crates/argus-mcp",
     "crates/argus-client",
+    "crates/argus-axum",
     "services/auth-api",
     "services/billing-api",
     "services/mcp-server",

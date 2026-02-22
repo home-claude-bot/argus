@@ -1,0 +1,39 @@
+[package]
+name = "argus-axum"
+description = "Axum integration for Argus auth and billing services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Enable rate limiting via governor crate
+rate-limiting = ["dep:governor"]
+# Enable metrics collection
+metrics = ["argus-client/prometheus"]
+
+[dependencies]
+argus-client = { path = "../argus-client" }
+argus-types = { path = "../argus-types" }
+axum = { workspace = true }
+tower = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+pin-project-lite = "0.2"
+governor = { version = "0.7", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+axum = { workspace = true, features = ["macros"] }
+tower = { workspace = true, features = ["util"] }
+hyper = { version = "1.0", features = ["full"] }
+http-body-util = "0.1"
