@@ -795,11 +795,15 @@ impl Organization {
 #[derive(Debug, Clone)]
 pub struct ApiKey {
     /// API key ID
-    pub id: String,
+    pub id: uuid::Uuid,
     /// Key name
     pub name: String,
     /// Key prefix (first 8 chars)
     pub prefix: String,
+    /// Owner user ID (if owned by a user)
+    pub user_id: Option<UserId>,
+    /// Owner organization ID (if owned by an org)
+    pub organization_id: Option<String>,
     /// Scopes/permissions
     pub scopes: Vec<String>,
     /// Whether key is active
@@ -808,10 +812,25 @@ pub struct ApiKey {
 
 impl ApiKey {
     fn from_proto(proto: argus_proto::ApiKey) -> Self {
+        use argus_proto::api_key::Owner;
+
+        let (user_id, organization_id) = match proto.owner {
+            Some(Owner::UserId(uid)) => {
+                (UserId::parse(&uid.value).ok(), None)
+            }
+            Some(Owner::OrganizationId(oid)) => {
+                (None, Some(oid.value))
+            }
+            None => (None, None),
+        };
+
         Self {
-            id: proto.id.map_or_else(String::new, |id| id.value),
+            id: uuid::Uuid::parse_str(&proto.id.map_or_else(String::new, |id| id.value))
+                .unwrap_or_default(),
             name: proto.name,
             prefix: proto.prefix,
+            user_id,
+            organization_id,
             scopes: proto.scopes,
             active: proto.active,
         }
