@@ -143,7 +143,8 @@ impl UserRateLimiter {
         match limiter.check() {
             Ok(()) => Ok(()),
             Err(not_until) => {
-                let wait_time = not_until.wait_time_from(governor::clock::DefaultClock::default().now());
+                let wait_time =
+                    not_until.wait_time_from(governor::clock::DefaultClock::default().now());
                 Err(AuthError::rate_limited(wait_time.as_secs()))
             }
         }

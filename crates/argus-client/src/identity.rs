@@ -815,12 +815,8 @@ impl ApiKey {
         use argus_proto::api_key::Owner;
 
         let (user_id, organization_id) = match proto.owner {
-            Some(Owner::UserId(uid)) => {
-                (UserId::parse(&uid.value).ok(), None)
-            }
-            Some(Owner::OrganizationId(oid)) => {
-                (None, Some(oid.value))
-            }
+            Some(Owner::UserId(uid)) => (UserId::parse(&uid.value).ok(), None),
+            Some(Owner::OrganizationId(oid)) => (None, Some(oid.value)),
             None => (None, None),
         };
 

@@ -16,10 +16,7 @@ pub enum AuthError {
 
     /// User lacks required tier.
     #[error("insufficient subscription tier: requires {required}, have {actual}")]
-    InsufficientTier {
-        required: String,
-        actual: String,
-    },
+    InsufficientTier { required: String, actual: String },
 
     /// User lacks required feature.
     #[error("feature not available: {0}")]
@@ -31,9 +28,7 @@ pub enum AuthError {
 
     /// Rate limit exceeded.
     #[error("rate limit exceeded: retry after {retry_after_secs} seconds")]
-    RateLimitExceeded {
-        retry_after_secs: u64,
-    },
+    RateLimitExceeded { retry_after_secs: u64 },
 
     /// Internal error during auth processing.
     #[error("internal auth error: {0}")]
@@ -53,17 +48,23 @@ impl IntoResponse for AuthError {
             Self::FeatureNotAvailable(_) => (StatusCode::FORBIDDEN, self.to_string()),
             Self::InsufficientRole(_) => (StatusCode::FORBIDDEN, self.to_string()),
             Self::RateLimitExceeded { retry_after_secs } => {
-                let mut response = (StatusCode::TOO_MANY_REQUESTS, self.to_string()).into_response();
-                response.headers_mut().insert(
-                    "Retry-After",
-                    retry_after_secs.to_string().parse().unwrap(),
-                );
+                let mut response =
+                    (StatusCode::TOO_MANY_REQUESTS, self.to_string()).into_response();
+                response
+                    .headers_mut()
+                    .insert("Retry-After", retry_after_secs.to_string().parse().unwrap());
                 return response;
             }
-            Self::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_string()),
+            Self::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error".to_string(),
+            ),
             Self::Client(e) => {
                 tracing::error!(error = %e, "Argus client error");
-                (StatusCode::SERVICE_UNAVAILABLE, "auth service unavailable".to_string())
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth service unavailable".to_string(),
+                )
             }
         };
 
