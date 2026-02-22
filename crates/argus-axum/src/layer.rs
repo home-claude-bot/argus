@@ -132,10 +132,7 @@ pub struct ArgusService<S> {
 
 impl<S> ArgusService<S> {
     /// Extract authentication credentials from the request.
-    fn extract_credentials(
-        &self,
-        req: &Request<Body>,
-    ) -> Option<(String, AuthSource)> {
+    fn extract_credentials(&self, req: &Request<Body>) -> Option<(String, AuthSource)> {
         // Try bearer token first
         if self.config.allow_bearer_token {
             if let Some(auth_header) = req.headers().get(header::AUTHORIZATION) {
