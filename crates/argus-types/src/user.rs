@@ -17,6 +17,22 @@ impl UserId {
     pub fn parse(s: &str) -> Result<Self, uuid::Error> {
         Ok(Self(Uuid::parse_str(s)?))
     }
+
+    /// Get the underlying UUID
+    #[must_use]
+    pub const fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+
+    /// Try to get the UUID, returning None if nil
+    #[must_use]
+    pub fn as_uuid_checked(&self) -> Option<Uuid> {
+        if self.0.is_nil() {
+            None
+        } else {
+            Some(self.0)
+        }
+    }
 }
 
 impl Default for UserId {
